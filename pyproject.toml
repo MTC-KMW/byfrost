@@ -26,7 +26,10 @@ dev = [
 byfrost = "cli.main:main"
 
 [tool.setuptools.packages.find]
-include = ["core*", "daemon*", "cli*"]
+include = ["core*", "daemon*", "cli*", "agents*"]
+
+[tool.setuptools.package-data]
+agents = ["roles/*.md", "templates/*.yaml", "templates/*.md"]
 
 [tool.ruff]
 target-version = "py311"

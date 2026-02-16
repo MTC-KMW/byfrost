@@ -1003,6 +1003,9 @@ def main():
         help="Daemon action",
     )
 
+    # byfrost init
+    sub.add_parser("init", help="Set up agent team in current project")
+
     # byfrost send
     p_send = sub.add_parser("send", help="Send a task to the Mac agent")
     p_send.add_argument("prompt", help="Task prompt for Claude Code")
@@ -1059,6 +1062,9 @@ def main():
         sys.exit(asyncio.run(_do_logout()))
     if args.command == "daemon":
         sys.exit(_do_daemon(args.action))
+    if args.command == "init":
+        from agents.init import run_init_wizard
+        sys.exit(run_init_wizard(Path.cwd()))
 
     # All remaining commands need daemon config + WebSocket
     config = load_config()
