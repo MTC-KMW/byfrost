@@ -1,15 +1,13 @@
-# Compound Anti-Patterns
+# Anti-Patterns
 
-Known mistakes to avoid. QA checks Lens 8 against this list.
-PM updates during the compound step.
+Known mistakes to avoid. All agents read this before every task. QA
+checks Lens 8 against this list, filtered by stack tag. PM promotes
+learnings here when they recur or prove harmful. Reference by number
+in task specs.
 
-## Format
-
-```
-### [Short name] — [Scope tag: (Apple), (Back End), (Front End), (All)]
-[What NOT to do, what went wrong, and what to do instead.]
-```
+Stack tags: (SwiftUI), (Back End), (Front End), (All)
 
 ---
 
+<!-- PM: read the highest number and increment when adding new entries -->
 <!-- Append new anti-patterns below this line -->

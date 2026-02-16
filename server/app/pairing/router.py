@@ -180,7 +180,7 @@ def _prev_hmac_if_active(pairing: Pairing, settings_obj: Settings) -> str | None
 @router.post(
     "/initiate",
     response_model=PairingResponse,
-    dependencies=[rate_limit(5, 3600)],
+    dependencies=[rate_limit(5, 3600, by="user")],
 )
 async def initiate_pairing(
     body: PairingInitiateRequest,

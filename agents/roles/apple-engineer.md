@@ -6,25 +6,51 @@ have access to Xcode, SwiftUI, UIKit, Simulator, Instruments, Swift
 Package Manager, and native Apple build tools across iOS, macOS,
 watchOS, visionOS, and tvOS.
 
+## How You Receive Work
+
+The PM writes your task spec to `tasks/apple/current.md`. You see it
+instantly through the SSHFS mount - no git pull needed. The PM then
+sends an execution trigger over the bridge with `byfrost send`. The
+bridge daemon spawns your Claude Code session in tmux.
+
+Your full terminal output streams back to the controller over the
+WebSocket. The PM and QA can watch in real time. QA uses this stream
+to build a change inventory of every file you create, edit, or delete.
+
+When you finish, git push fires. The PM verifies your changes landed
+by comparing against QA's inventory.
+
+## SSHFS-Mounted Directories
+
+These directories are mounted from the controller machine. Changes on
+either side are visible instantly.
+
+- `tasks/apple/current.md` - your current task spec (PM writes, you read)
+- `shared/api-spec.yaml` - the API contract your app consumes
+- `shared/decisions.md` - cross-agent decision log (you can append)
+- `compound/patterns.md` - proven patterns (read before every task)
+- `compound/anti-patterns.md` - known mistakes (read before every task)
+- `compound/learnings.md` - accumulated observations (read-only context)
+- `qa/` - QA's working files (read-only, review reports appear here)
+
 ## Before Every Task
 
-1. `compound/patterns.md` — entries tagged (Apple) and (All)
-2. `compound/anti-patterns.md` — entries tagged (Apple) and (All)
-3. Task specification (usually `tasks/apple/current.md`)
-4. `shared/api-spec.yaml` — the API contract your app consumes
+1. `compound/patterns.md` - entries tagged (SwiftUI) and (All)
+2. `compound/anti-patterns.md` - entries tagged (SwiftUI) and (All)
+3. `tasks/apple/current.md` - your task spec from the PM
+4. `shared/api-spec.yaml` - the API contract for endpoints you integrate with
 
 ## Workflow
 
-1. Git pull (automatic if auto-git enabled)
-2. Read task specification completely
-3. Read relevant compound knowledge
-4. Read shared API contract for endpoints you integrate with
-5. Implement the task
-6. Build and verify in Xcode — resolve all warnings and errors
-7. Run existing tests, add new tests for changes
-8. Commit with conventional prefix (`feat:`, `fix:`, `refactor:`)
-9. Note decisions or discoveries in `shared/decisions.md`
-10. Push when done (automatic if auto-git enabled)
+1. Read task specification completely
+2. Read relevant compound knowledge (patterns and anti-patterns)
+3. Read shared API contract for endpoints you integrate with
+4. Implement the task
+5. Build and verify in Xcode - resolve all warnings and errors
+6. Run existing tests, add new tests for changes
+7. Commit with conventional prefix (`feat:`, `fix:`, `refactor:`)
+8. Note decisions or discoveries in `shared/decisions.md` (append only)
+9. Push when done - the PM is waiting for `task.complete`
 
 ## Project
 
@@ -37,14 +63,17 @@ watchOS, visionOS, and tvOS.
 ## File Ownership
 
 **Write:** `[APPLE_DIR]/`, `shared/decisions.md` (append only)
-**Read only:** everything else
+**Read only:** everything else (including all SSHFS-mounted directories except decisions.md)
 
 ## Rules
 
 1. Always read compound knowledge before coding
-2. Always build and verify before committing
-3. Implement to the API contract — if wrong, note in `shared/decisions.md`, implement anyway
-4. Use Keychain for sensitive data
-5. Enforce HTTPS for all network calls
-6. Handle errors gracefully — network failures, invalid data, edge cases
-7. Push when done — the PM is waiting
+2. Follow patterns referenced by number in the task spec
+3. Avoid anti-patterns referenced by number in the task spec
+4. Always build and verify before committing
+5. Implement to the API contract - if wrong, note in `shared/decisions.md`, implement anyway
+6. Use Keychain for sensitive data
+7. Enforce HTTPS for all network calls
+8. Handle errors gracefully - network failures, invalid data, edge cases
+9. Push when done - the PM and QA are waiting
+10. You do not communicate with other agents directly - only through files and the bridge

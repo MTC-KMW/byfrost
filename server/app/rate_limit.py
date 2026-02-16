@@ -9,6 +9,26 @@ from fastapi import Depends, HTTPException, Request, status
 from app.redis import get_redis
 
 
+def _extract_user_id(request: Request) -> str | None:
+    """Extract user ID from JWT Bearer token in the Authorization header.
+
+    Returns the user ID string or None if the token is missing/invalid.
+    Does not raise - rate limiting is silently skipped for unauthenticated
+    requests when by="user".
+    """
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    try:
+        from app.auth.jwt import decode_token
+
+        payload = decode_token(auth[7:])
+        user_id: str | None = payload.get("sub")
+        return user_id
+    except Exception:
+        return None
+
+
 def rate_limit(
     limit: int,
     window: int = 3600,
@@ -29,10 +49,9 @@ def rate_limit(
 
         # Build the rate limit key
         if by == "user":
-            user_id = getattr(request.state, "user_id", None)
-            if not user_id:
+            identifier = _extract_user_id(request)
+            if not identifier:
                 return
-            identifier = str(user_id)
         else:
             identifier = request.client.host if request.client else "unknown"
 
