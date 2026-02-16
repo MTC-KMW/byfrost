@@ -220,10 +220,14 @@ async def initiate_pairing(
             Pairing.status == "active",
         )
     )
-    if existing.scalar_one_or_none():
+    existing_pairing = existing.scalar_one_or_none()
+    if existing_pairing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Active pairing already exists for this device pair",
+            detail={
+                "message": "Active pairing already exists for this device pair",
+                "pairing_id": str(existing_pairing.id),
+            },
         )
 
     # Create pairing record (flush to get ID for cert CN)

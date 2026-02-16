@@ -189,6 +189,64 @@ class ByfrostAPIClient:
         result: list[dict[str, Any]] = resp.json()
         return result
 
+    # -- Pairing (for connect command) --
+
+    async def initiate_pairing(
+        self, token: str, worker_id: str, controller_id: str
+    ) -> dict[str, Any]:
+        """POST /pair/initiate - create pairing between devices.
+
+        Returns {"pairing_id": str, "status": str}. On 409 (already paired),
+        returns {"pairing_id": str, "already_exists": True}.
+        """
+        resp = await self._request(
+            "POST",
+            "/pair/initiate",
+            json_body={"worker_id": worker_id, "controller_id": controller_id},
+            token=token,
+        )
+        if resp.status_code == 409:
+            detail = resp.json().get("detail", {})
+            if isinstance(detail, dict) and "pairing_id" in detail:
+                return {"pairing_id": detail["pairing_id"], "already_exists": True}
+            return {"error": "Active pairing already exists", "already_exists": True}
+        resp.raise_for_status()
+        result: dict[str, Any] = resp.json()
+        return result
+
+    async def get_controller_credentials(
+        self, pairing_id: str, device_token: str
+    ) -> dict[str, Any]:
+        """GET /pair/{pairing_id}/credentials/controller.
+
+        Uses device_token (not JWT) for authentication.
+        Returns {ca_cert, cert, private_key, hmac_secret, prev_hmac_secret}.
+        """
+        resp = await self._request(
+            "GET",
+            f"/pair/{pairing_id}/credentials/controller",
+            token=device_token,
+        )
+        resp.raise_for_status()
+        result: dict[str, Any] = resp.json()
+        return result
+
+    async def get_pairing_addresses(
+        self, pairing_id: str, device_token: str
+    ) -> dict[str, Any]:
+        """GET /pair/{pairing_id}/addresses.
+
+        Uses device_token for authentication. Returns worker addresses.
+        """
+        resp = await self._request(
+            "GET",
+            f"/pair/{pairing_id}/addresses",
+            token=device_token,
+        )
+        resp.raise_for_status()
+        result: dict[str, Any] = resp.json()
+        return result
+
     # -- Device deletion (for logout command) --
 
     async def delete_device(self, token: str, device_id: str) -> None:

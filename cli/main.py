@@ -27,6 +27,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 try:
     import websockets
@@ -40,11 +41,12 @@ from cli.api_client import (
     ByfrostAPIClient,
     detect_platform,
     detect_role,
+    ensure_byfrost_dir,
     get_device_name,
     load_auth,
     save_auth,
 )
-from core.config import DEFAULT_PORT, DEFAULT_SERVER_URL, source_env_file
+from core.config import CERTS_DIR, DEFAULT_PORT, DEFAULT_SERVER_URL, source_env_file
 from core.security import MessageSigner, SecretManager, TLSManager
 
 # ---------------------------------------------------------------------------
@@ -572,6 +574,229 @@ async def _do_login(server_url: str | None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Connect helpers
+# ---------------------------------------------------------------------------
+
+
+def _save_credentials(creds: dict) -> None:
+    """Save pairing credentials (certs + HMAC secret) to ~/.byfrost/."""
+    import base64
+    import stat as stat_mod
+
+    ensure_byfrost_dir()
+    CERTS_DIR.mkdir(parents=True, exist_ok=True)
+    CERTS_DIR.chmod(0o700)
+
+    # CA certificate
+    TLSManager.CA_CERT.write_text(creds["ca_cert"])
+
+    # Controller certificate
+    TLSManager.CLIENT_CERT.write_text(creds["cert"])
+
+    # Controller private key (restricted permissions)
+    TLSManager.CLIENT_KEY.write_text(creds["private_key"])
+    TLSManager.CLIENT_KEY.chmod(stat_mod.S_IRUSR | stat_mod.S_IWUSR)
+
+    # HMAC secret: server returns base64-encoded bytes, decode to hex for SecretManager
+    secret_bytes = base64.b64decode(creds["hmac_secret"])
+    SecretManager.save(secret_bytes.hex())
+
+
+async def _test_worker_connection(addresses: dict | None, port: int) -> str | None:
+    """Try to connect to the worker via WebSocket with mTLS.
+
+    Tries addresses in order: tailscale_ip, local_ip, public_ip.
+    Returns the successful address or None if all fail.
+    """
+    if not addresses:
+        return None
+
+    ssl_ctx = TLSManager.get_client_ssl_context()
+
+    # Try addresses in priority order
+    candidates = []
+    for key in ("tailscale_ip", "local_ip", "public_ip"):
+        addr: str | None = addresses.get(key)
+        if addr:
+            candidates.append(addr)
+
+    addr_port = addresses.get("port", port)
+
+    for addr in candidates:
+        uri = f"wss://{addr}:{addr_port}"
+        try:
+            ws = await asyncio.wait_for(
+                websockets.connect(uri, ssl=ssl_ctx, open_timeout=5),
+                timeout=8,
+            )
+            # Send a ping
+            start = time.time()
+            msg = json.dumps({"type": "ping", "timestamp": time.time()})
+            await ws.send(msg)
+            raw = await asyncio.wait_for(ws.recv(), timeout=5)
+            latency = (time.time() - start) * 1000
+            data = json.loads(raw)
+            await ws.close()
+            if data.get("type") == "pong":
+                _print_status(f"Connection verified: {addr} ({latency:.0f}ms)")
+                return addr
+        except Exception:
+            continue
+
+    return None
+
+
+async def _do_connect(worker_hint: str | None) -> int:
+    """Pair this controller with a worker and fetch mTLS credentials.
+
+    Returns 0 on success, 1 on failure.
+    """
+    # Check auth
+    auth = load_auth()
+    if not auth or not auth.get("access_token"):
+        _print_error("Not logged in. Run 'byfrost login' first.")
+        return 1
+
+    if auth.get("role") != "controller":
+        _print_error("Connect is for controllers only. This device is registered as a worker.")
+        return 1
+
+    device_id = auth.get("device_id")
+    device_token = auth.get("device_token")
+    if not device_id or not device_token:
+        _print_error("Missing device credentials. Run 'byfrost login' again.")
+        return 1
+
+    api = ByfrostAPIClient(server_url=auth.get("server_url"))
+    access_token = auth["access_token"]
+
+    # List devices to find workers
+    _print_status("Discovering workers on your account...")
+    try:
+        devices = await api.list_devices(access_token)
+    except httpx.HTTPStatusError as e:
+        _print_error(f"Failed to list devices: {e.response.status_code}")
+        return 1
+    except httpx.ConnectError:
+        _print_error(f"Cannot reach server at {auth.get('server_url')}")
+        return 1
+
+    workers = [d for d in devices if d.get("role") == "worker"]
+
+    if not workers:
+        _print_error("No workers found on your account.")
+        _print_error("Run 'byfrost login' on your Mac first.")
+        return 1
+
+    # Select worker
+    worker: dict[str, Any] | None = None
+    if len(workers) == 1:
+        worker = workers[0]
+        _print_status(f"Found worker: {worker['name']} ({worker['platform']})")
+    elif worker_hint:
+        # Match by name or ID
+        worker = None
+        for w in workers:
+            if w["name"] == worker_hint or str(w["id"]) == worker_hint:
+                worker = w
+                break
+        if not worker:
+            _print_error(f"Worker '{worker_hint}' not found. Available workers:")
+            for w in workers:
+                _print_error(f"  {w['name']} ({w['id']})")
+            return 1
+        _print_status(f"Selected worker: {worker['name']} ({worker['platform']})")
+    else:
+        # Multiple workers, no hint - prompt user
+        print()
+        _print_status("Multiple workers found. Select one:")
+        for i, w in enumerate(workers, 1):
+            print(f"  {i}. {w['name']} ({w['platform']})")
+        print()
+        try:
+            choice = input("Enter number: ").strip()
+            idx = int(choice) - 1
+            if idx < 0 or idx >= len(workers):
+                _print_error("Invalid selection.")
+                return 1
+            worker = workers[idx]
+        except (ValueError, EOFError, KeyboardInterrupt):
+            _print_error("Invalid selection.")
+            return 1
+
+    assert worker is not None  # guaranteed by branches above
+    worker_id = str(worker["id"])
+
+    # Initiate pairing
+    _print_status("Initiating pairing...")
+    try:
+        pair_result = await api.initiate_pairing(access_token, worker_id, device_id)
+    except httpx.HTTPStatusError as e:
+        _print_error(f"Pairing failed: {e.response.status_code}")
+        return 1
+
+    if pair_result.get("already_exists"):
+        pairing_id = pair_result.get("pairing_id")
+        if not pairing_id:
+            _print_error("Pairing already exists but could not retrieve pairing ID.")
+            return 1
+        _print_status("Using existing pairing.")
+    else:
+        pairing_id = str(pair_result["pairing_id"])
+        _print_status("Pairing created.")
+
+    # Fetch credentials
+    _print_status("Fetching mTLS credentials...")
+    try:
+        creds = await api.get_controller_credentials(pairing_id, device_token)
+    except httpx.HTTPStatusError as e:
+        _print_error(f"Credential fetch failed: {e.response.status_code}")
+        return 1
+
+    # Save certs and secret
+    _save_credentials(creds)
+    _print_status("Certificates saved to ~/.byfrost/certs/")
+    _print_status("HMAC secret saved to ~/.byfrost/secret")
+
+    # Fetch worker addresses
+    worker_addresses = None
+    try:
+        addr_result = await api.get_pairing_addresses(pairing_id, device_token)
+        worker_addresses = addr_result.get("addresses")
+    except Exception:
+        _print_status("Could not fetch worker addresses (worker may not have reported yet).")
+
+    # Update auth.json
+    auth["pairing_id"] = pairing_id
+    if worker_addresses:
+        auth["worker_addresses"] = worker_addresses
+    save_auth(auth)
+
+    # Test connection (best-effort)
+    if worker_addresses:
+        _print_status("Testing direct connection to worker...")
+        result = await _test_worker_connection(worker_addresses, DEFAULT_PORT)
+        if not result:
+            print()
+            _print_status("Could not reach worker directly (daemon may not be running yet).")
+            _print_status("Credentials are saved - connection will work once the daemon starts.")
+    else:
+        _print_status("No worker addresses available yet. Skipping connection test.")
+
+    # Summary
+    print()
+    _print_status(f"Paired with worker: {worker['name']}")
+    _print_status(f"Pairing ID: {pairing_id}")
+    _print_status("mTLS certificates and HMAC secret installed.")
+    print()
+    _print_status("Next steps:")
+    _print_status("  byfrost ping    - verify connection to worker")
+    _print_status("  byfrost send    - send a task to the worker")
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI Entry Point
 # ---------------------------------------------------------------------------
 
@@ -589,6 +814,13 @@ def main():
     p_login.add_argument(
         "--server", default=None,
         help="Server URL (default: https://api.byfrost.dev or BYFROST_SERVER env)",
+    )
+
+    # byfrost connect
+    p_connect = sub.add_parser("connect", help="Pair with a worker and fetch credentials")
+    p_connect.add_argument(
+        "--worker", default=None,
+        help="Worker name or ID (auto-selects if only one worker)",
     )
 
     # byfrost send
@@ -639,6 +871,8 @@ def main():
     # Commands that don't need the daemon WebSocket client
     if args.command == "login":
         sys.exit(asyncio.run(_do_login(args.server)))
+    if args.command == "connect":
+        sys.exit(asyncio.run(_do_connect(args.worker)))
 
     # All remaining commands need daemon config + WebSocket
     config = load_config()
