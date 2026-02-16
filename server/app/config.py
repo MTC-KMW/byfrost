@@ -4,6 +4,7 @@ All settings have sensible defaults for local Docker Compose development.
 Production values are set via environment variables in the deployment.
 """
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,6 +48,20 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
     jwt_refresh_token_expire_days: int = 30
+
+    @model_validator(mode="after")
+    def normalize_database_url(self) -> "Settings":
+        """Rewrite DATABASE_URL for asyncpg compatibility.
+
+        Fly Postgres sets DATABASE_URL with 'postgres://' scheme.
+        SQLAlchemy async requires 'postgresql+asyncpg://'.
+        """
+        url = self.database_url
+        if url.startswith("postgres://"):
+            self.database_url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            self.database_url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return self
 
 
 def get_settings() -> Settings:
