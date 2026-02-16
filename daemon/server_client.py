@@ -235,7 +235,7 @@ class ServerClient:
             use_device_token=True,
         )
         if resp.status_code == 200:
-            self.log.debug(f"Heartbeat sent: {addresses.get('local_ip')}")
+            self.log.debug(f"Heartbeat sent: {addresses}")
         else:
             self.log.warning(f"Heartbeat: HTTP {resp.status_code}")
 
