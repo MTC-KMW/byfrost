@@ -57,6 +57,7 @@ def detect_addresses(port: int = DEFAULT_PORT) -> dict[str, Any]:
         addresses["local_ip"] = "127.0.0.1"
 
     # Tailscale IP: look for 100.x.y.z address
+    # Method 1: check getaddrinfo for hostname
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None):
             ip = str(info[4][0])
@@ -65,6 +66,28 @@ def detect_addresses(port: int = DEFAULT_PORT) -> dict[str, Any]:
                 break
     except OSError:
         pass
+
+    # Method 2: try `tailscale ip -4` if method 1 didn't find it
+    if "tailscale_ip" not in addresses:
+        import subprocess
+        # macOS App Store installs tailscale CLI here
+        tailscale_paths = [
+            "tailscale",
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        ]
+        for ts_cmd in tailscale_paths:
+            try:
+                result = subprocess.run(
+                    [ts_cmd, "ip", "-4"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0:
+                    ip = result.stdout.strip().split("\n")[0]
+                    if ip.startswith("100."):
+                        addresses["tailscale_ip"] = ip
+                        break
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
 
     return addresses
 

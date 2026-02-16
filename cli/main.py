@@ -512,7 +512,12 @@ async def _do_login(server_url: str | None) -> int:
         await asyncio.sleep(interval)
         try:
             result = await api.poll_device_token(device_code)
-        except (httpx.HTTPStatusError, httpx.ConnectError):
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                # Rate limited - back off significantly
+                interval = max(interval, 10)
+            continue
+        except httpx.ConnectError:
             continue  # transient error, retry
 
         if "access_token" in result:

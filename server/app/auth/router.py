@@ -141,7 +141,7 @@ async def device_code() -> DeviceCodeResponse:
     )
 
 
-@router.post("/device/token", dependencies=[rate_limit(20, 3600)])
+@router.post("/device/token", dependencies=[rate_limit(200, 3600)])
 async def device_token(
     body: DeviceTokenRequest,
     db: AsyncSession = Depends(get_db),

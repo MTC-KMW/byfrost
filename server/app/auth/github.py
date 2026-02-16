@@ -6,7 +6,7 @@ from app.config import get_settings
 
 GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
-GITHUB_DEVICE_CODE_URL = "https://github.com/login/oauth/device/code"
+GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
 GITHUB_USER_URL = "https://api.github.com/user"
 
 

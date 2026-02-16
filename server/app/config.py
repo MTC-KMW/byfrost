@@ -49,18 +49,33 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 60
     jwt_refresh_token_expire_days: int = 30
 
+    # Derived: True if the original DATABASE_URL had sslmode=disable
+    database_ssl_disabled: bool = False
+
     @model_validator(mode="after")
     def normalize_database_url(self) -> "Settings":
         """Rewrite DATABASE_URL for asyncpg compatibility.
 
-        Fly Postgres sets DATABASE_URL with 'postgres://' scheme.
-        SQLAlchemy async requires 'postgresql+asyncpg://'.
+        Fly Postgres sets DATABASE_URL with 'postgres://' scheme and
+        '?sslmode=disable'. SQLAlchemy async requires 'postgresql+asyncpg://'
+        and asyncpg rejects sslmode as a connect kwarg, so we strip it and
+        pass ssl=False via connect_args instead.
         """
         url = self.database_url
+        # Track sslmode=disable before stripping
+        if "sslmode=disable" in url:
+            self.database_ssl_disabled = True
+        # Rewrite scheme
         if url.startswith("postgres://"):
-            self.database_url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql://"):
-            self.database_url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        # Strip sslmode param (asyncpg rejects it as a kwarg)
+        if "?sslmode=" in url:
+            url = url.split("?sslmode=")[0]
+        elif "&sslmode=" in url:
+            url = url.replace("&sslmode=disable", "").replace("&sslmode=require", "")
+        self.database_url = url
         return self
 
 

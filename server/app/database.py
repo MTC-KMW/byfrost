@@ -7,7 +7,9 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.config import get_settings
 
-engine = create_async_engine(get_settings().database_url, echo=False)
+_settings = get_settings()
+_connect_args: dict = {"ssl": False} if _settings.database_ssl_disabled else {}
+engine = create_async_engine(_settings.database_url, echo=False, connect_args=_connect_args)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 
