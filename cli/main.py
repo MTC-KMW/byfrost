@@ -34,7 +34,17 @@ except ImportError:
     print("ERROR: websockets not installed. Run: pip3 install websockets --break-system-packages")
     sys.exit(1)
 
-from core.config import DEFAULT_PORT, source_env_file
+import httpx
+
+from cli.api_client import (
+    ByfrostAPIClient,
+    detect_platform,
+    detect_role,
+    get_device_name,
+    load_auth,
+    save_auth,
+)
+from core.config import DEFAULT_PORT, DEFAULT_SERVER_URL, source_env_file
 from core.security import MessageSigner, SecretManager, TLSManager
 
 # ---------------------------------------------------------------------------
@@ -419,6 +429,149 @@ def _print_queue_status(data):
 
 
 # ---------------------------------------------------------------------------
+# Login helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_username_from_jwt(token: str) -> str:
+    """Decode JWT payload to extract GitHub username.
+
+    Uses base64 decoding only - no signature verification needed since
+    we just received this token from the server we trust.
+    """
+    import base64
+
+    try:
+        payload_b64 = token.split(".")[1]
+        # Add padding
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += "=" * padding
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        return payload.get("username", "unknown")  # type: ignore[no-any-return]
+    except (IndexError, ValueError, json.JSONDecodeError):
+        return "unknown"
+
+
+async def _do_login(server_url: str | None) -> int:
+    """Execute device flow login: get code, poll, register device.
+
+    Returns 0 on success, 1 on failure.
+    """
+    # Check if already logged in
+    existing = load_auth()
+    if existing and existing.get("access_token"):
+        _print_status(f"Already logged in as {existing.get('github_username', '?')}")
+        _print_status("Run 'byfrost logout' first to switch accounts.")
+        return 0
+
+    # Resolve server URL: --server flag > env var > default
+    if server_url is None:
+        server_url = os.environ.get("BYFROST_SERVER", DEFAULT_SERVER_URL)
+
+    api = ByfrostAPIClient(server_url=server_url)
+
+    # Step 1: Request device code
+    _print_status("Starting GitHub device authorization...")
+    try:
+        code_data = await api.request_device_code()
+    except httpx.HTTPStatusError as e:
+        _print_error(f"Server error: {e.response.status_code}")
+        return 1
+    except httpx.ConnectError:
+        _print_error(f"Cannot reach server at {server_url}")
+        _print_error("Check the URL and your network connection.")
+        return 1
+
+    user_code = code_data["user_code"]
+    verification_uri = code_data["verification_uri"]
+    expires_in = code_data["expires_in"]
+    interval = code_data.get("interval", 5)
+    device_code = code_data["device_code"]
+
+    # Step 2: Display instructions
+    print()
+    _print_status("Open this URL in your browser:")
+    print(f"\n    {verification_uri}\n")
+    _print_status("Enter this code when prompted:")
+    print(f"\n    {user_code}\n")
+    _print_status(f"Waiting for authorization (expires in {expires_in // 60} minutes)...")
+
+    # Step 3: Poll for completion
+    tokens = None
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            result = await api.poll_device_token(device_code)
+        except (httpx.HTTPStatusError, httpx.ConnectError):
+            continue  # transient error, retry
+
+        if "access_token" in result:
+            tokens = result
+            break
+        elif result.get("status") == "pending":
+            continue
+        elif result.get("status") == "slow_down":
+            interval = result.get("interval", interval + 5)
+            continue
+        elif "error" in result:
+            _print_error(f"Authorization failed: {result['error']}")
+            return 1
+
+    print()
+    _print_status("Authorization successful!")
+
+    # Step 4: Detect platform and role
+    plat = detect_platform()
+    role = detect_role()
+    device_name = get_device_name()
+
+    if plat == "macos":
+        _print_status(f"Platform: {plat}, role: {role} (macOS is always worker)")
+    else:
+        _print_status(f"Platform: {plat}, role: {role}")
+
+    # Step 5: Register device
+    _print_status(f"Registering device '{device_name}' as {role}...")
+    try:
+        reg = await api.register_device(
+            tokens["access_token"], device_name, role, plat
+        )
+    except httpx.HTTPStatusError as e:
+        _print_error(f"Device registration failed: {e.response.status_code}")
+        return 1
+
+    # Step 6: Save credentials
+    github_username = _extract_username_from_jwt(tokens["access_token"])
+    auth_data = {
+        "server_url": server_url,
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+        "device_id": str(reg["device_id"]),
+        "device_token": reg["device_token"],
+        "github_username": github_username,
+        "platform": plat,
+        "role": role,
+    }
+    save_auth(auth_data)
+
+    print()
+    _print_status(f"Logged in as {github_username}")
+    _print_status(f"Device registered: {device_name} ({role}/{plat})")
+    _print_status(f"Server: {server_url}")
+    _print_status("Credentials saved to ~/.byfrost/auth.json")
+
+    if role == "controller":
+        print()
+        _print_status("Next step: run 'byfrost connect' to pair with your worker.")
+    else:
+        print()
+        _print_status("Next step: run 'byfrost daemon install' to start the daemon.")
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI Entry Point
 # ---------------------------------------------------------------------------
 
@@ -430,6 +583,13 @@ def main():
         description="Byfrost CLI - communicate with the Mac daemon"
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    # byfrost login
+    p_login = sub.add_parser("login", help="Sign in with GitHub and register device")
+    p_login.add_argument(
+        "--server", default=None,
+        help="Server URL (default: https://api.byfrost.dev or BYFROST_SERVER env)",
+    )
 
     # byfrost send
     p_send = sub.add_parser("send", help="Send a task to the Mac agent")
@@ -475,6 +635,12 @@ def main():
     p_audit.add_argument("-f", "--follow", action="store_true", help="Follow audit output")
 
     args = parser.parse_args()
+
+    # Commands that don't need the daemon WebSocket client
+    if args.command == "login":
+        sys.exit(asyncio.run(_do_login(args.server)))
+
+    # All remaining commands need daemon config + WebSocket
     config = load_config()
     client = ByfrostClient(config)
 

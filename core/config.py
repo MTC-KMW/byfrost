@@ -17,12 +17,14 @@ CERTS_DIR = BRIDGE_DIR / "certs"
 LOG_DIR = BRIDGE_DIR / "logs"
 SECRET_FILE = BRIDGE_DIR / "secret"
 SECRET_HISTORY_FILE = BRIDGE_DIR / "secret.history"
+AUTH_FILE = BRIDGE_DIR / "auth.json"
 
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
 
 DEFAULT_PORT = 9784
+DEFAULT_SERVER_URL = "https://api.byfrost.dev"
 
 # ---------------------------------------------------------------------------
 # Shared config helpers
