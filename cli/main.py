@@ -888,6 +888,81 @@ async def _do_logout() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Daemon management
+# ---------------------------------------------------------------------------
+
+
+def _do_daemon(action: str) -> int:
+    """Manage the byfrost daemon service.
+
+    Returns 0 on success, 1 on failure.
+    """
+    from cli.daemon_mgr import get_daemon_manager
+
+    mgr = get_daemon_manager()
+
+    if action == "install":
+        _print_status("Installing byfrost daemon service...")
+        if mgr.install():
+            _print_status("Daemon service installed and enabled.")
+            _print_status("Run 'byfrost daemon start' to start it.")
+            return 0
+        else:
+            _print_error("Failed to install daemon service.")
+            return 1
+
+    elif action == "uninstall":
+        _print_status("Removing byfrost daemon service...")
+        if mgr.uninstall():
+            _print_status("Daemon service removed.")
+            return 0
+        else:
+            _print_error("Failed to remove daemon service.")
+            return 1
+
+    elif action == "start":
+        if mgr.start():
+            _print_status("Daemon started.")
+            return 0
+        else:
+            _print_error("Failed to start daemon.")
+            return 1
+
+    elif action == "stop":
+        if mgr.stop():
+            _print_status("Daemon stopped.")
+            return 0
+        else:
+            _print_error("Failed to stop daemon.")
+            return 1
+
+    elif action == "restart":
+        _print_status("Restarting daemon...")
+        if mgr.restart():
+            _print_status("Daemon restarted.")
+            return 0
+        else:
+            _print_error("Failed to restart daemon.")
+            return 1
+
+    elif action == "status":
+        info = mgr.status()
+        if not info["installed"]:
+            _print_status("Daemon: not installed")
+            _print_status("Run 'byfrost daemon install' to set up the service.")
+            return 0
+        state = "running" if info["running"] else "stopped"
+        _print_status(f"Daemon: {state}")
+        if info.get("pid"):
+            _print_status(f"PID: {info['pid']}")
+        return 0
+
+    else:
+        _print_error(f"Unknown daemon action: {action}")
+        return 1
+
+
+# ---------------------------------------------------------------------------
 # CLI Entry Point
 # ---------------------------------------------------------------------------
 
@@ -919,6 +994,14 @@ def main():
 
     # byfrost logout
     sub.add_parser("logout", help="Unregister device and clear credentials")
+
+    # byfrost daemon <action>
+    p_daemon = sub.add_parser("daemon", help="Manage the byfrost daemon service")
+    p_daemon.add_argument(
+        "action",
+        choices=["install", "uninstall", "start", "stop", "restart", "status"],
+        help="Daemon action",
+    )
 
     # byfrost send
     p_send = sub.add_parser("send", help="Send a task to the Mac agent")
@@ -974,6 +1057,8 @@ def main():
         sys.exit(asyncio.run(_do_account()))
     if args.command == "logout":
         sys.exit(asyncio.run(_do_logout()))
+    if args.command == "daemon":
+        sys.exit(_do_daemon(args.action))
 
     # All remaining commands need daemon config + WebSocket
     config = load_config()
