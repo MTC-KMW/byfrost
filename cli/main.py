@@ -1015,6 +1015,14 @@ def main():
         "agent", nargs="?", help="Agent to add/remove (backend or frontend)",
     )
 
+    # byfrost sshfs
+    p_sshfs = sub.add_parser("sshfs", help="Configure SSHFS mounts (Mac worker)")
+    p_sshfs.add_argument(
+        "action", nargs="?", default="setup",
+        choices=["setup", "mount", "unmount", "remount", "status"],
+        help="SSHFS action (default: setup)",
+    )
+
     # byfrost send
     p_send = sub.add_parser("send", help="Send a task to the Mac agent")
     p_send.add_argument("prompt", help="Task prompt for Claude Code")
@@ -1077,6 +1085,9 @@ def main():
     if args.command == "team":
         from agents.team import run_team_command
         sys.exit(run_team_command(args.action, args.agent, Path.cwd()))
+    if args.command == "sshfs":
+        from cli.sshfs_config import run_sshfs_command
+        sys.exit(run_sshfs_command(args.action, Path.cwd()))
 
     # All remaining commands need daemon config + WebSocket
     config = load_config()
