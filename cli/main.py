@@ -81,9 +81,18 @@ def load_config():
             source_env_file(cfg_file, config, _cli_env_map)
             break
 
-    # BRIDGE_HOST falls back to MAC_HOSTNAME from environment
+    # BRIDGE_HOST falls back to MAC_HOSTNAME, then saved worker addresses
     if not config["host"]:
-        config["host"] = os.environ.get("MAC_HOSTNAME", "localhost")
+        config["host"] = os.environ.get("MAC_HOSTNAME", "")
+    if not config["host"]:
+        # Try worker addresses from auth.json (set by 'byfrost connect')
+        auth = load_auth() or {}
+        addrs = auth.get("worker_addresses", {})
+        config["host"] = (
+            addrs.get("tailscale_ip")
+            or addrs.get("local_ip")
+            or "localhost"
+        )
 
     # Load secret from secure file only
     config["secret"] = SecretManager.load()
