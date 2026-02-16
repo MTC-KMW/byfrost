@@ -61,6 +61,22 @@ jobs:
 
   server-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: byfrost
+          POSTGRES_PASSWORD: byfrost
+          POSTGRES_DB: byfrost
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://byfrost:byfrost@localhost:5432/byfrost
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -68,5 +84,8 @@ jobs:
           python-version: "3.11"
       - working-directory: server
         run: pip install -e ".[dev]"
+      - name: Run migrations
+        working-directory: server
+        run: alembic upgrade head
       - working-directory: server
         run: pytest tests/ -v
