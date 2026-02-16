@@ -439,37 +439,37 @@ def main():
     p_send.add_argument("--project", help="Override project path on Mac")
     p_send.add_argument("--tools", help="Override allowed tools")
 
-    # byfroststatus
+    # byfrost status
     p_status = sub.add_parser("status", help="Check daemon and queue status")
     p_status.add_argument("task_id", nargs="?", help="Specific task ID")
 
-    # byfrostcancel
+    # byfrost cancel
     p_cancel = sub.add_parser("cancel", help="Cancel a task")
     p_cancel.add_argument("task_id", help="Task ID to cancel")
 
-    # byfrostattach
+    # byfrost attach
     sub.add_parser("attach", help="Stream output from the active task")
 
-    # byfrostping
+    # byfrost ping
     sub.add_parser("ping", help="Verify daemon connectivity")
 
-    # byfrostfollowup
+    # byfrost followup
     p_follow = sub.add_parser("followup", help="Send follow-up to active task")
     p_follow.add_argument("task_id", help="Task ID")
     p_follow.add_argument("text", help="Follow-up instruction")
 
-    # byfrostlogs
+    # byfrost logs
     p_logs = sub.add_parser("logs", help="View daemon logs (via SSH)")
     p_logs.add_argument("-n", "--lines", type=int, default=50, help="Number of lines")
     p_logs.add_argument("-f", "--follow", action="store_true", help="Follow log output")
 
-    # byfrostrotate
+    # byfrost rotate
     sub.add_parser("rotate", help="Rotate the shared HMAC secret")
 
-    # byfrostsecurity
+    # byfrost security
     sub.add_parser("security", help="Show security status (TLS, certs, secret)")
 
-    # byfrostaudit
+    # byfrost audit
     p_audit = sub.add_parser("audit", help="View audit log (via SSH)")
     p_audit.add_argument("-n", "--lines", type=int, default=50, help="Number of lines")
     p_audit.add_argument("-f", "--follow", action="store_true", help="Follow audit output")
