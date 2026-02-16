@@ -549,6 +549,23 @@ def generate_root_claude_md(config: TeamConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
+def replace_marker_sections(
+    existing: str, new_content: str, markers: list[str],
+) -> str:
+    """Replace content between byfrost markers in existing text.
+
+    For each marker name, finds <!-- byfrost:NAME -->...<!-- /byfrost:NAME -->
+    in both texts and replaces the section in existing with the one from new_content.
+    """
+    for marker in markers:
+        pattern = rf"<!-- byfrost:{marker} -->.*?<!-- /byfrost:{marker} -->"
+        match_new = re.search(pattern, new_content, re.DOTALL)
+        if match_new:
+            if re.search(pattern, existing, re.DOTALL):
+                existing = re.sub(pattern, match_new.group(), existing, flags=re.DOTALL)
+    return existing
+
+
 def _merge_into_existing_claude_md(existing: str, team_content: str) -> str:
     """Merge team content into an existing CLAUDE.md.
 
@@ -556,15 +573,16 @@ def _merge_into_existing_claude_md(existing: str, team_content: str) -> str:
     Otherwise append with a separator.
     """
     if "<!-- byfrost:" in existing:
+        result = replace_marker_sections(
+            existing, team_content, ["team", "communication", "cycle"],
+        )
+        # Add any new marker sections not yet in existing
         for marker in ("team", "communication", "cycle"):
             pattern = rf"<!-- byfrost:{marker} -->.*?<!-- /byfrost:{marker} -->"
             match_new = re.search(pattern, team_content, re.DOTALL)
-            if match_new:
-                if re.search(pattern, existing, re.DOTALL):
-                    existing = re.sub(pattern, match_new.group(), existing, flags=re.DOTALL)
-                else:
-                    existing = existing.rstrip() + "\n\n" + match_new.group() + "\n"
-        return existing
+            if match_new and not re.search(pattern, result, re.DOTALL):
+                result = result.rstrip() + "\n\n" + match_new.group() + "\n"
+        return result
     return existing.rstrip() + "\n\n---\n\n" + team_content
 
 
