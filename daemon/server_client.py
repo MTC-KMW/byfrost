@@ -146,6 +146,9 @@ class ServerClient:
         self._client = httpx.AsyncClient(timeout=30.0)
         self._running = True
 
+        # Discover pairing if not in auth.json
+        await self._discover_pairing()
+
         # Fetch credentials on startup (certs + HMAC)
         await self._fetch_credentials_if_needed()
 
@@ -189,6 +192,43 @@ class ServerClient:
         self._pairing_id = auth.get("pairing_id", "")
 
         return bool(self._server_url and self._device_id and self._device_token)
+
+    # -- Pairing discovery --
+
+    async def _discover_pairing(self) -> None:
+        """If pairing_id is not in auth.json, ask the server for it.
+
+        Called once on daemon startup. The device_id and device_token
+        are enough to look up the active pairing on the server.
+        """
+        if self._pairing_id:
+            return  # Already known
+
+        if not self._device_id or not self._device_token:
+            return
+
+        try:
+            resp = await self._request(
+                "GET",
+                f"/devices/{self._device_id}/pairing",
+                use_device_token=True,
+            )
+            if resp.status_code == 404:
+                self.log.info("No active pairing found (not yet paired)")
+                return
+            resp.raise_for_status()
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            self.log.warning(f"Pairing discovery failed: {e}")
+            return
+
+        data = resp.json()
+        self._pairing_id = str(data["pairing_id"])
+        self.log.info(f"Discovered pairing: {self._pairing_id} (role={data['role']})")
+
+        # Persist so we don't need to discover again
+        auth = load_auth() or {}
+        auth["pairing_id"] = self._pairing_id
+        save_auth(auth)
 
     # -- HTTP helpers --
 

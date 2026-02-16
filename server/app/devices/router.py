@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import get_current_user
 from app.database import get_db
-from app.models import Device, User
+from app.models import Device, Pairing, User
 from app.rate_limit import rate_limit
 
 router = APIRouter()
@@ -47,6 +47,12 @@ class DeviceInfo(BaseModel):
 
 class HeartbeatRequest(BaseModel):
     addresses: dict  # {local_ip, tailscale_ip, public_ip, port}
+
+
+class DevicePairingResponse(BaseModel):
+    pairing_id: uuid.UUID
+    status: str
+    role: str  # "worker" or "controller"
 
 
 # -- Device token auth dependency --
@@ -165,3 +171,39 @@ async def heartbeat(
     device.last_heartbeat = datetime.now(timezone.utc)
     await db.commit()
     return {"status": "ok"}
+
+
+@router.get("/{device_id}/pairing", response_model=DevicePairingResponse)
+async def get_device_pairing(
+    device: Device = Depends(get_device_by_token),
+    db: AsyncSession = Depends(get_db),
+) -> DevicePairingResponse:
+    """Return the active pairing for this device (device token auth)."""
+    # Check as worker first (most common use case for this endpoint)
+    result = await db.execute(
+        select(Pairing).where(
+            Pairing.worker_id == device.id, Pairing.status == "active"
+        )
+    )
+    pairing = result.scalar_one_or_none()
+    if pairing:
+        return DevicePairingResponse(
+            pairing_id=pairing.id, status=pairing.status, role="worker"
+        )
+
+    # Check as controller
+    result = await db.execute(
+        select(Pairing).where(
+            Pairing.controller_id == device.id, Pairing.status == "active"
+        )
+    )
+    pairing = result.scalar_one_or_none()
+    if pairing:
+        return DevicePairingResponse(
+            pairing_id=pairing.id, status=pairing.status, role="controller"
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="No active pairing for this device",
+    )

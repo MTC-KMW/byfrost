@@ -116,24 +116,42 @@ class ByfrostClient:
 
     async def _connect(self):
         ssl_context = None
+        uri = self.uri  # local copy - don't permanently mutate self.uri
         if self._use_tls:
             try:
                 ssl_context = TLSManager.get_client_ssl_context()
             except Exception as e:
                 _print_error(f"TLS setup failed: {e}")
                 _print_error("Falling back to plaintext (Tailscale encryption only)")
-                self.uri = self.uri.replace("wss://", "ws://")
+                uri = uri.replace("wss://", "ws://")
+                ssl_context = None
 
         try:
             return await websockets.connect(
-                self.uri,
+                uri,
                 ssl=ssl_context,
                 ping_interval=20,
                 ping_timeout=10,
                 close_timeout=5,
             )
         except (ConnectionRefusedError, OSError) as e:
-            print(f"ERROR: Cannot connect to byfrost daemon at {self.uri}")
+            # If TLS connection failed, try plaintext fallback
+            if self._use_tls and ssl_context is not None:
+                _print_error(f"TLS connection failed: {e}")
+                _print_error("Retrying without TLS...")
+                plain_uri = self.uri.replace("wss://", "ws://")
+                try:
+                    return await websockets.connect(
+                        plain_uri,
+                        ssl=None,
+                        ping_interval=20,
+                        ping_timeout=10,
+                        close_timeout=5,
+                    )
+                except (ConnectionRefusedError, OSError):
+                    pass  # Fall through to error below
+
+            print(f"ERROR: Cannot connect to byfrost daemon at {uri}")
             print(f"  {e}")
             print("\nIs the daemon running on the Mac?")
             print(f"  ssh {self.config['host']} 'python3 -m daemon.byfrost_daemon'")
@@ -817,6 +835,36 @@ async def _do_connect(worker_hint: str | None) -> int:
     return 0
 
 
+async def _refresh_worker_addresses() -> dict | None:
+    """Refresh worker addresses from the server.
+
+    Fetches current addresses via the pairing endpoint and updates auth.json.
+    Returns the addresses dict, or None if unavailable.
+    """
+    auth = load_auth()
+    if not auth:
+        return None
+
+    pairing_id = auth.get("pairing_id")
+    device_token = auth.get("device_token")
+    if not pairing_id or not device_token:
+        return None
+
+    api = ByfrostAPIClient(server_url=auth.get("server_url"))
+    try:
+        result = await api.get_pairing_addresses(pairing_id, device_token)
+        addresses: dict | None = result.get("addresses")
+        if addresses:
+            auth["worker_addresses"] = addresses
+            save_auth(auth)
+            return addresses
+    except Exception:
+        pass  # Best-effort
+
+    cached: dict | None = auth.get("worker_addresses")
+    return cached
+
+
 # ---------------------------------------------------------------------------
 # Account / Logout helpers
 # ---------------------------------------------------------------------------
@@ -1104,6 +1152,13 @@ def main():
         sys.exit(run_sshfs_command(args.action, Path.cwd()))
 
     # All remaining commands need daemon config + WebSocket
+    # Refresh worker addresses from the server before connecting
+    if args.command in ("ping", "send", "status", "cancel", "attach", "followup"):
+        try:
+            asyncio.run(_refresh_worker_addresses())
+        except Exception:
+            pass  # Best-effort; proceed with cached addresses
+
     config = load_config()
     client = ByfrostClient(config)
 

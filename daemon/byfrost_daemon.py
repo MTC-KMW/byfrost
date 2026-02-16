@@ -908,7 +908,11 @@ class ByfrostDaemon:
         auto_git = "enabled" if self.config.get("auto_git") else "disabled"
         self.log.info(f"Auto git pull/push: {auto_git}")
 
-        # TLS setup
+        # Fetch credentials from server BEFORE deciding TLS
+        # This ensures certs are available if a pairing exists
+        await self._start_server_client()
+
+        # TLS setup (after credential fetch so certs may now be available)
         ssl_context = None
         use_tls = TLSManager.has_server_certs()
         if use_tls:
@@ -920,7 +924,6 @@ class ByfrostDaemon:
                 use_tls = False
         else:
             self.log.warning("TLS: disabled (no server certificates found)")
-            self.log.warning("  Run setup-bridge.sh to generate certificates")
 
         protocol = "wss" if use_tls else "ws"
 
@@ -946,9 +949,6 @@ class ByfrostDaemon:
         # Start health monitor
         health_task = asyncio.create_task(self._health_loop())
 
-        # Start server communication (heartbeat, credential fetch)
-        server_task = asyncio.create_task(self._start_server_client())
-
         # Start WebSocket server
         try:
             async with serve(
@@ -966,7 +966,6 @@ class ByfrostDaemon:
             self.log.info("Server shutting down...")
         finally:
             health_task.cancel()
-            server_task.cancel()
             await self.server_client.stop()
             self._running = False
 

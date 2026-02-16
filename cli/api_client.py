@@ -115,7 +115,7 @@ class ByfrostAPIClient:
         json_body: dict[str, Any] | None = None,
         token: str | None = None,
     ) -> httpx.Response:
-        """Make an HTTP request to the server."""
+        """Make an HTTP request to the server. Auto-refreshes on 401."""
         headers: dict[str, str] = {}
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -127,7 +127,51 @@ class ByfrostAPIClient:
                 json=json_body,
                 headers=headers,
             )
+
+        # Auto-refresh on 401 if we used an access token (not device token)
+        if resp.status_code == 401 and token:
+            auth = load_auth()
+            if auth and token == auth.get("access_token"):
+                new_token = await self._try_refresh_token()
+                if new_token:
+                    headers["Authorization"] = f"Bearer {new_token}"
+                    async with httpx.AsyncClient(timeout=self._timeout) as client:
+                        resp = await client.request(
+                            method,
+                            f"{self._server_url}{path}",
+                            json=json_body,
+                            headers=headers,
+                        )
+
         return resp
+
+    async def _try_refresh_token(self) -> str | None:
+        """Attempt to refresh the access token using the stored refresh token.
+
+        Returns the new access token, or None if refresh fails.
+        Updates auth.json on success.
+        """
+        auth = load_auth()
+        if not auth or not auth.get("refresh_token"):
+            return None
+
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(
+                    f"{self._server_url}/auth/refresh",
+                    json={"refresh_token": auth["refresh_token"]},
+                )
+            if resp.status_code != 200:
+                return None
+
+            data = resp.json()
+            auth["access_token"] = data["access_token"]
+            auth["refresh_token"] = data["refresh_token"]
+            save_auth(auth)
+            result: str = data["access_token"]
+            return result
+        except (httpx.RequestError, KeyError):
+            return None
 
     # -- Device flow --
 
