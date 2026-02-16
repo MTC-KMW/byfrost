@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     api_version: str = "v1"
 
     # Database
-    database_url: str = "postgresql+asyncpg://byfrost:byfrost@localhost:5432/byfrost"
+    database_url: str = "postgresql+asyncpg://byfrost:byfrost@localhost:5433/byfrost"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

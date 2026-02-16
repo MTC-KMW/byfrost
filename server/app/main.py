@@ -12,14 +12,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.database import engine
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application startup and shutdown."""
-    # Startup: DB pool, Redis connection (added in Tasks 1.2+)
+    # Engine is created at import time; just store reference for disposal
+    app.state.engine = engine
     yield
-    # Shutdown: close DB pool, Redis connection
+    await engine.dispose()
 
 
 def create_app() -> FastAPI:
