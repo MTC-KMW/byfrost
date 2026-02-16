@@ -46,7 +46,14 @@ from cli.api_client import (
     load_auth,
     save_auth,
 )
-from core.config import CERTS_DIR, DEFAULT_PORT, DEFAULT_SERVER_URL, source_env_file
+from core.config import (
+    AUTH_FILE,
+    CERTS_DIR,
+    DEFAULT_PORT,
+    DEFAULT_SERVER_URL,
+    SECRET_FILE,
+    source_env_file,
+)
 from core.security import MessageSigner, SecretManager, TLSManager
 
 # ---------------------------------------------------------------------------
@@ -797,6 +804,90 @@ async def _do_connect(worker_hint: str | None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Account / Logout helpers
+# ---------------------------------------------------------------------------
+
+
+async def _do_account() -> int:
+    """Show account info: username, devices, pairing status.
+
+    Returns 0 on success, 1 if not logged in.
+    """
+    auth = load_auth()
+    if not auth or not auth.get("access_token"):
+        _print_error("Not logged in. Run 'byfrost login' first.")
+        return 1
+
+    # Local info
+    print()
+    _print_status("Account Info")
+    print(f"  Username:   {auth.get('github_username', '?')}")
+    print(f"  Server:     {auth.get('server_url', '?')}")
+    print(f"  Device ID:  {auth.get('device_id', '?')}")
+    print(f"  Role:       {auth.get('role', '?')}")
+    print(f"  Platform:   {auth.get('platform', '?')}")
+
+    pairing_id = auth.get("pairing_id")
+    if pairing_id:
+        print(f"  Pairing:    {pairing_id}")
+    else:
+        print("  Pairing:    not connected")
+
+    # Fetch device list from server
+    api = ByfrostAPIClient(server_url=auth.get("server_url"))
+    try:
+        devices = await api.list_devices(auth["access_token"])
+        print()
+        _print_status(f"Devices ({len(devices)})")
+        for d in devices:
+            marker = " (this)" if str(d.get("id")) == auth.get("device_id") else ""
+            heartbeat = d.get("last_heartbeat", "-") or "-"
+            line = f"  {d['name']:<20} {d['role']:<12} {d['platform']:<8} last seen: {heartbeat}"
+            print(f"{line}{marker}")
+    except Exception:
+        print()
+        _print_status("Could not fetch device list (token may be expired).")
+
+    print()
+    return 0
+
+
+async def _do_logout() -> int:
+    """Unregister device from server and clear local credentials.
+
+    Returns 0 on success, 1 if not logged in.
+    """
+    import shutil
+
+    auth = load_auth()
+    if not auth or not auth.get("access_token"):
+        _print_error("Not logged in.")
+        return 1
+
+    username = auth.get("github_username", "?")
+
+    # Unregister device from server (best-effort)
+    device_id = auth.get("device_id")
+    if device_id:
+        api = ByfrostAPIClient(server_url=auth.get("server_url"))
+        try:
+            await api.delete_device(auth["access_token"], device_id)
+            _print_status("Device unregistered from server.")
+        except Exception:
+            _print_status("Could not reach server (device may still be registered).")
+
+    # Remove local files
+    AUTH_FILE.unlink(missing_ok=True)
+    SECRET_FILE.unlink(missing_ok=True)
+    if CERTS_DIR.exists():
+        shutil.rmtree(CERTS_DIR)
+
+    _print_status(f"Logged out {username}.")
+    _print_status("Local credentials cleared (~/.byfrost/).")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI Entry Point
 # ---------------------------------------------------------------------------
 
@@ -822,6 +913,12 @@ def main():
         "--worker", default=None,
         help="Worker name or ID (auto-selects if only one worker)",
     )
+
+    # byfrost account
+    sub.add_parser("account", help="Show account info and device list")
+
+    # byfrost logout
+    sub.add_parser("logout", help="Unregister device and clear credentials")
 
     # byfrost send
     p_send = sub.add_parser("send", help="Send a task to the Mac agent")
@@ -873,6 +970,10 @@ def main():
         sys.exit(asyncio.run(_do_login(args.server)))
     if args.command == "connect":
         sys.exit(asyncio.run(_do_connect(args.worker)))
+    if args.command == "account":
+        sys.exit(asyncio.run(_do_account()))
+    if args.command == "logout":
+        sys.exit(asyncio.run(_do_logout()))
 
     # All remaining commands need daemon config + WebSocket
     config = load_config()
