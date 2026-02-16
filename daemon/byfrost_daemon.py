@@ -46,6 +46,7 @@ from core.security import (
     SecretManager,
     TLSManager,
 )
+from daemon.server_client import ServerClient
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -507,6 +508,18 @@ class ByfrostDaemon:
         # Primary signer for outgoing messages (always the current secret)
         self._primary_signer = MessageSigner(config["secret"]) if config["secret"] else None
 
+        # Server communication (heartbeat, credential fetch, rotation)
+        self.server_client = ServerClient(
+            config, logger, on_secret_rotated=self._refresh_signers,
+        )
+
+    def _refresh_signers(self) -> None:
+        """Reload HMAC signers after secret rotation."""
+        valid = SecretManager.get_valid_secrets()
+        self._signers = [MessageSigner(s) for s in valid]
+        self._primary_signer = MessageSigner(valid[0]) if valid else None
+        self.log.info(f"Signers refreshed ({len(valid)} valid secrets)")
+
     # --- Authentication ---
 
     def _authenticate(self, message, source: str) -> tuple[bool, str]:
@@ -870,6 +883,14 @@ class ByfrostDaemon:
 
     # --- Server Lifecycle ---
 
+    async def _start_server_client(self) -> None:
+        """Initialize server client (non-blocking, failures are non-fatal)."""
+        try:
+            await self.server_client.start()
+        except Exception as e:
+            self.log.warning(f"Server client init failed: {e}")
+            self.log.warning("Daemon continues without server communication")
+
     async def start(self):
         """Start the WebSocket server and health monitor."""
         self._start_time = time.time()
@@ -925,6 +946,9 @@ class ByfrostDaemon:
         # Start health monitor
         health_task = asyncio.create_task(self._health_loop())
 
+        # Start server communication (heartbeat, credential fetch)
+        server_task = asyncio.create_task(self._start_server_client())
+
         # Start WebSocket server
         try:
             async with serve(
@@ -942,6 +966,8 @@ class ByfrostDaemon:
             self.log.info("Server shutting down...")
         finally:
             health_task.cancel()
+            server_task.cancel()
+            await self.server_client.stop()
             self._running = False
 
             # Kill any active sessions
