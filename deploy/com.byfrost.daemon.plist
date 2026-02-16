@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Byfrost Daemon â€” launchd configuration
+
+  Install:
+    cp com.byfrost.daemon.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.byfrost.daemon.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.byfrost.daemon.plist
+    rm ~/Library/LaunchAgents/com.byfrost.daemon.plist
+
+  Logs:
+    ~/.byfrost/logs/launchd-stdout.log
+    ~/.byfrost/logs/launchd-stderr.log
+    ~/.byfrost/logs/daemon.log (structured app logs)
+
+  Status:
+    launchctl list | grep byfrost
+-->
+<dict>
+    <key>Label</key>
+    <string>com.byfrost.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Replaced by setup-bridge.sh with actual paths -->
+        <string>/usr/bin/python3</string>
+        <string>DAEMON_PATH_PLACEHOLDER</string>
+    </array>
+
+    <!-- Start on login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash (up to 10 times, then back off) -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Throttle restarts: wait 10s between crash restarts -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Working directory: project root -->
+    <key>WorkingDirectory</key>
+    <string>WORKDIR_PLACEHOLDER</string>
+
+    <!-- Environment -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+
+    <!-- Log files -->
+    <key>StandardOutPath</key>
+    <string>LOGDIR_PLACEHOLDER/launchd-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>LOGDIR_PLACEHOLDER/launchd-stderr.log</string>
+
+    <!-- Resource limits -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
+</dict>
+</plist>

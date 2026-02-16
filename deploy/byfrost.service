@@ -1,0 +1,27 @@
+[Unit]
+Description=Byfrost Worker Daemon
+Documentation=https://github.com/byfrost/byfrost
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/bin/python3 -m daemon.byfrost_daemon --config %h/.byfrost/config.json
+WorkingDirectory=%h
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+Environment=BYFROST_HOME=%h/.byfrost
+Environment=PYTHONPATH=/usr/lib/byfrost
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.byfrost %h/.byfrost/logs
+
+[Install]
+WantedBy=default.target

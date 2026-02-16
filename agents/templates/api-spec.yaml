@@ -1,0 +1,41 @@
+openapi: "3.0.3"
+info:
+  title: "[PROJECT_NAME] API"
+  version: "0.1.0"
+  description: |
+    Shared API contract. All stacks implement or consume this spec.
+    Changes here BEFORE implementation. PM owns this file.
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  # Add endpoints here before implementing them.
+  # Format:
+  #
+  # /resource:
+  #   get:
+  #     summary: What it does
+  #     parameters: [...]
+  #     responses:
+  #       "200":
+  #         description: Success
+  #         content:
+  #           application/json:
+  #             schema: { ... }
+  #       "400":
+  #         description: Validation error
+  #       "401":
+  #         description: Unauthorized
