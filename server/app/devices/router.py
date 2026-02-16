@@ -8,13 +8,14 @@ from typing import Literal
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import get_current_user
 from app.database import get_db
 from app.models import Device, User
+from app.rate_limit import rate_limit
 
 router = APIRouter()
 device_security = HTTPBearer()
@@ -24,7 +25,7 @@ device_security = HTTPBearer()
 
 
 class DeviceRegisterRequest(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=255)
     role: Literal["worker", "controller"]
     platform: Literal["macos", "linux", "windows"]
 
@@ -80,7 +81,7 @@ async def get_device_by_token(
 # -- Endpoints --
 
 
-@router.post("/register")
+@router.post("/register", dependencies=[rate_limit(10, 3600)])
 async def register_device(
     body: DeviceRegisterRequest,
     current_user: User = Depends(get_current_user),

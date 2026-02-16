@@ -2,7 +2,9 @@
 
 import random
 import uuid
+from unittest.mock import patch
 
+import fakeredis.aioredis
 import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -17,6 +19,7 @@ from app.models import User
 @pytest.fixture()
 async def async_client():
     """Async test client with transaction rollback for isolation."""
+    fake_redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     test_engine = create_async_engine(get_settings().database_url)
     conn = await test_engine.connect()
     txn = await conn.begin()
@@ -29,12 +32,16 @@ async def async_client():
     app = create_app()
     app.dependency_overrides[get_db] = override_get_db
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+    with patch("app.rate_limit.get_redis", return_value=fake_redis):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as ac:
+            yield ac
 
     await txn.rollback()
     await conn.close()
     await test_engine.dispose()
+    await fake_redis.aclose()
 
 
 async def _seed_user(

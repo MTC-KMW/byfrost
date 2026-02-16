@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+import fakeredis.aioredis
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -25,13 +26,16 @@ MOCK_GITHUB_USER = {
 @pytest.fixture()
 def client():
     """Create a test client with a fresh app."""
+    fake_redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     app = create_app()
-    return TestClient(app)
+    with patch("app.rate_limit.get_redis", return_value=fake_redis):
+        yield TestClient(app)
 
 
 @pytest.fixture()
 async def async_client():
     """Async test client with a fresh DB engine (avoids asyncpg pool contamination)."""
+    fake_redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     test_engine = create_async_engine(get_settings().database_url)
     test_session = async_sessionmaker(test_engine, expire_on_commit=False)
 
@@ -42,9 +46,13 @@ async def async_client():
     app = create_app()
     app.dependency_overrides[get_db] = override_get_db
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+    with patch("app.rate_limit.get_redis", return_value=fake_redis):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as ac:
+            yield ac
     await test_engine.dispose()
+    await fake_redis.aclose()
 
 
 @pytest.fixture()

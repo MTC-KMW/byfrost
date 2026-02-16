@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,7 @@ from app.auth.jwt import create_access_token, create_refresh_token, decode_token
 from app.config import get_settings
 from app.database import get_db
 from app.models import User
+from app.rate_limit import rate_limit
 
 router = APIRouter()
 
@@ -45,11 +46,11 @@ class DeviceCodeResponse(BaseModel):
 
 
 class DeviceTokenRequest(BaseModel):
-    device_code: str
+    device_code: str = Field(min_length=1)
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str = Field(min_length=1)
 
 
 # -- Helpers --
@@ -87,7 +88,7 @@ def _issue_tokens(user: User) -> TokenResponse:
 
 # -- Browser flow --
 
-@router.get("/github")
+@router.get("/github", dependencies=[rate_limit(20, 3600)])
 async def github_redirect() -> RedirectResponse:
     """Redirect to GitHub OAuth authorization page."""
     settings = get_settings()
@@ -103,7 +104,7 @@ async def github_redirect() -> RedirectResponse:
     return RedirectResponse(url=f"https://github.com/login/oauth/authorize?{params}")
 
 
-@router.get("/github/callback")
+@router.get("/github/callback", dependencies=[rate_limit(20, 3600)])
 async def github_callback(
     code: str,
     state: str,
@@ -127,7 +128,7 @@ async def github_callback(
 
 # -- Device flow --
 
-@router.post("/device/code")
+@router.post("/device/code", dependencies=[rate_limit(20, 3600)])
 async def device_code() -> DeviceCodeResponse:
     """Start the device authorization flow. Returns a user code to display."""
     data = await request_device_code()
@@ -140,7 +141,7 @@ async def device_code() -> DeviceCodeResponse:
     )
 
 
-@router.post("/device/token")
+@router.post("/device/token", dependencies=[rate_limit(20, 3600)])
 async def device_token(
     body: DeviceTokenRequest,
     db: AsyncSession = Depends(get_db),

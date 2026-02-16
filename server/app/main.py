@@ -13,14 +13,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import engine
+from app.logging import RequestLoggingMiddleware, setup_logging
+from app.redis import close_redis, init_redis
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application startup and shutdown."""
-    # Engine is created at import time; just store reference for disposal
     app.state.engine = engine
+    await init_redis()
     yield
+    await close_redis()
     await engine.dispose()
 
 
@@ -28,13 +31,16 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
 
+    setup_logging(debug=settings.debug)
+
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
         lifespan=lifespan,
     )
 
-    # CORS
+    # Middleware (order matters: outermost runs first)
+    app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
