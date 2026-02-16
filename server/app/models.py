@@ -78,7 +78,15 @@ class Pairing(Base):
         UUID(as_uuid=True), ForeignKey("devices.id", ondelete="CASCADE")
     )
     ca_cert: Mapped[str | None] = mapped_column(Text, nullable=True)
+    worker_cert: Mapped[str | None] = mapped_column(Text, nullable=True)
+    worker_key: Mapped[str | None] = mapped_column(Text, nullable=True)  # encrypted
+    controller_cert: Mapped[str | None] = mapped_column(Text, nullable=True)
+    controller_key: Mapped[str | None] = mapped_column(Text, nullable=True)  # encrypted
     hmac_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prev_hmac_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hmac_rotated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(20), server_default="active")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
