@@ -1,6 +1,9 @@
 """Tests for per-pairing CA certificate generation."""
 
+import base64
 import ipaddress
+import json
+import secrets
 import uuid
 
 import pytest
@@ -10,7 +13,14 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from app.pairing.crypto import PairingCerts, _parse_san_entries, generate_pairing_certs
+from app.pairing.crypto import (
+    PairingCerts,
+    _parse_san_entries,
+    decrypt_secret,
+    encrypt_secret,
+    generate_hmac_secret,
+    generate_pairing_certs,
+)
 
 
 @pytest.fixture()
@@ -240,3 +250,67 @@ class TestParseSanEntries:
 
         assert ipaddress.ip_address("127.0.0.1") in ip_values
         assert "localhost" in dns_values
+
+
+# -- Helper for HMAC tests --
+
+def _test_key() -> str:
+    """Return a valid base64-encoded 32-byte key for testing."""
+    return base64.b64encode(secrets.token_bytes(32)).decode()
+
+
+class TestHmacSecret:
+    """HMAC secret generation and AES-256-GCM encryption."""
+
+    def test_generate_hmac_secret_length(self) -> None:
+        """Generated secret is exactly 32 bytes (256-bit)."""
+        secret = generate_hmac_secret()
+        assert isinstance(secret, bytes)
+        assert len(secret) == 32
+
+    def test_generate_hmac_secret_unique(self) -> None:
+        """Two generated secrets are different."""
+        assert generate_hmac_secret() != generate_hmac_secret()
+
+    def test_encrypt_decrypt_roundtrip(self) -> None:
+        """Encrypting then decrypting returns the original secret."""
+        key = _test_key()
+        secret = generate_hmac_secret()
+        encrypted = encrypt_secret(secret, key)
+        decrypted = decrypt_secret(encrypted, key)
+        assert decrypted == secret
+
+    def test_encrypted_format(self) -> None:
+        """Encrypted output is valid JSON with expected fields."""
+        key = _test_key()
+        encrypted = encrypt_secret(b"test-data", key)
+        data = json.loads(encrypted)
+        assert data["v"] == 1
+        assert "nonce" in data
+        assert "ciphertext" in data
+
+    def test_decrypt_wrong_key_fails(self) -> None:
+        """Decryption with a different key raises an error."""
+        key1 = _test_key()
+        key2 = _test_key()
+        encrypted = encrypt_secret(b"secret", key1)
+        with pytest.raises(Exception):
+            decrypt_secret(encrypted, key2)
+
+    def test_decrypt_corrupted_ciphertext_fails(self) -> None:
+        """Tampered ciphertext raises an error."""
+        key = _test_key()
+        encrypted = encrypt_secret(b"secret", key)
+        data = json.loads(encrypted)
+        # Flip a byte in the ciphertext
+        ct = base64.b64decode(data["ciphertext"])
+        corrupted = bytes([ct[0] ^ 0xFF]) + ct[1:]
+        data["ciphertext"] = base64.b64encode(corrupted).decode()
+        with pytest.raises(Exception):
+            decrypt_secret(json.dumps(data), key)
+
+    def test_encrypt_invalid_key_length_fails(self) -> None:
+        """Non-32-byte key raises ValueError."""
+        bad_key = base64.b64encode(b"too-short").decode()
+        with pytest.raises(ValueError, match="32 bytes"):
+            encrypt_secret(b"secret", bad_key)

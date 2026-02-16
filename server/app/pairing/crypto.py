@@ -1,13 +1,18 @@
-"""Per-pairing CA generation for mTLS certificate provisioning.
+"""Per-pairing crypto: CA generation, HMAC secret encryption.
 
-Generates an ephemeral Certificate Authority, signs worker (server) and
-controller (client) certificates, then destroys the CA private key.
-After key destruction, the server cannot forge new certificates for
-existing pairings, even if fully compromised.
+CA generation: creates an ephemeral Certificate Authority, signs worker
+and controller certificates, then destroys the CA private key.
+
+HMAC secrets: generates 256-bit secrets and encrypts them with
+AES-256-GCM before database storage.
 """
 
+import base64
 import gc
 import ipaddress
+import json
+import os
+import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -15,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 # Validity periods
@@ -219,3 +225,58 @@ def generate_pairing_certs(
             serialization.NoEncryption(),
         ).decode(),
     )
+
+
+# ---------------------------------------------------------------------------
+# HMAC secret generation and AES-256-GCM encryption
+# ---------------------------------------------------------------------------
+
+
+def generate_hmac_secret() -> bytes:
+    """Generate a 256-bit (32-byte) random HMAC secret."""
+    return secrets.token_bytes(32)
+
+
+def encrypt_secret(plaintext: bytes, key_b64: str) -> str:
+    """Encrypt bytes with AES-256-GCM, return JSON string for DB storage.
+
+    Args:
+        plaintext: The secret bytes to encrypt.
+        key_b64: Base64-encoded 32-byte encryption key.
+
+    Returns:
+        JSON string containing version, nonce, and ciphertext (all b64).
+    """
+    key = base64.b64decode(key_b64)
+    if len(key) != 32:
+        raise ValueError("Encryption key must be exactly 32 bytes")
+
+    nonce = os.urandom(12)  # 96-bit nonce for GCM
+    aesgcm = AESGCM(key)
+    ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+
+    return json.dumps({
+        "v": 1,
+        "nonce": base64.b64encode(nonce).decode(),
+        "ciphertext": base64.b64encode(ciphertext).decode(),
+    })
+
+
+def decrypt_secret(encrypted_json: str, key_b64: str) -> bytes:
+    """Decrypt an AES-256-GCM encrypted secret from its JSON representation.
+
+    Args:
+        encrypted_json: JSON string produced by encrypt_secret().
+        key_b64: Base64-encoded 32-byte encryption key.
+
+    Returns:
+        Original plaintext bytes.
+    """
+    key = base64.b64decode(key_b64)
+    data = json.loads(encrypted_json)
+
+    nonce = base64.b64decode(data["nonce"])
+    ciphertext = base64.b64decode(data["ciphertext"])
+
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, ciphertext, None)

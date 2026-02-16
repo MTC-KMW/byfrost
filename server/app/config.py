@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     github_client_id: str = ""
     github_client_secret: str = ""
 
+    # Encryption (AES-256-GCM for HMAC secrets at rest)
+    encryption_key: str = ""  # Base64-encoded 32-byte key
+
     # JWT
     jwt_secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
