@@ -55,6 +55,12 @@ Do not skip ahead to later phases.
 ruff check .                    # lint
 mypy core/ daemon/ cli/         # type check
 pytest tests/                   # unit tests
+
+# Server
+cd server && pip install -e ".[dev]"      # install server deps
+cd server && uvicorn app.main:app --reload  # run server standalone
+cd server && pytest tests/ -v               # server tests
+cd server && docker compose up              # full stack (app + postgres + redis)
 ```
 
 ## Conventions
