@@ -17,7 +17,7 @@ Do not skip ahead to later phases.
 - `core/` — shared Python: security (TLS, HMAC, sanitization, rate limiting, audit), wire protocol, config
 - `daemon/` — Mac worker: WebSocket server, tmux session manager, task queue, git ops, server heartbeat
 - `cli/` — cross-platform CLI: `byfrost` command with login, connect, init, send, status, daemon management, etc.
-- `server/` — coordination server: FastAPI, GitHub OAuth, device registration, per-pairing CA, HMAC secrets
+- `server/` — coordination server: FastAPI, GitHub OAuth (browser + device flow), device registration, per-pairing CA, HMAC secrets
 - `agents/` — end-user deliverable templates that `byfrost init` processes (NOT dev docs)
 - `mac-app/` — SwiftUI menu bar app (GUI, optional on headless Macs)
 - `linux-app/` — GTK 4 tray app (GUI, optional on headless Linux)

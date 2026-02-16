@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
+    server_url: str = "http://localhost:8000"
+
+    # GitHub OAuth
+    github_client_id: str = ""
+    github_client_secret: str = ""
+
+    # JWT
+    jwt_secret_key: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60
+    jwt_refresh_token_expire_days: int = 30
 
 
 def get_settings() -> Settings:
