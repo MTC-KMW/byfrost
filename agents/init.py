@@ -503,23 +503,37 @@ def detect_frontend_details(project_dir: Path) -> dict[str, str]:
     """Auto-detect frontend project details."""
     details: dict[str, str] = {}
 
-    # Find package.json -- check subdirectories too
+    # Find package.json with frontend deps -- prefer subdirs over bare root
+    _fe_indicators = {
+        "next", "@remix-run/react", "nuxt", "gatsby", "astro",
+        "react", "react-dom", "vue", "svelte", "@sveltejs/kit",
+        "@angular/core", "solid-js",
+    }
     pkg_path = None
     pkg_dir = project_dir
     for candidate in [
-        project_dir / "package.json",
         project_dir / "web" / "package.json",
         project_dir / "frontend" / "package.json",
         project_dir / "client" / "package.json",
+        project_dir / "package.json",
     ]:
-        if candidate.exists():
-            pkg_path = candidate
-            pkg_dir = candidate.parent
-            # Set frontend dir from where we found it
-            rel = candidate.parent.relative_to(project_dir)
-            if str(rel) != ".":
-                details["FRONTEND_DIR"] = str(rel)
-            break
+        if not candidate.exists():
+            continue
+        try:
+            _pkg = json.loads(candidate.read_text())
+            _deps = {
+                **_pkg.get("dependencies", {}),
+                **_pkg.get("devDependencies", {}),
+            }
+            if _deps.keys() & _fe_indicators:
+                pkg_path = candidate
+                pkg_dir = candidate.parent
+                rel = candidate.parent.relative_to(project_dir)
+                if str(rel) != ".":
+                    details["FRONTEND_DIR"] = str(rel)
+                break
+        except (json.JSONDecodeError, OSError):
+            continue
 
     if pkg_path:
         # Detect package manager from lock files
@@ -1040,11 +1054,16 @@ def _fetch_worker_project_info() -> dict[str, str]:
             ) as ws:
                 msg: dict[str, Any] = {"type": "project.info"}
                 if signer:
-                    msg.update(signer.sign(msg))
+                    msg = signer.sign(msg)
                 await ws.send(json.dumps(msg))
 
                 raw = await asyncio.wait_for(ws.recv(), timeout=5)
                 data = json.loads(raw)
+                if data.get("type") == "error":
+                    _print_error(
+                        f"Worker error: {data.get('message', 'unknown')}"
+                    )
+                    return {}
                 if data.get("type") == "project.info":
                     result: dict[str, str] = {}
                     for key in (
@@ -1057,7 +1076,8 @@ def _fetch_worker_project_info() -> dict[str, str]:
             return {}
 
         return asyncio.run(_query())
-    except Exception:
+    except Exception as exc:
+        _print_error(f"Worker query failed: {exc}")
         return {}
 
 
