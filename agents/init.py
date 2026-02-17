@@ -83,7 +83,6 @@ class TeamConfig:
     worker_hostname: str
     team_size: int
     agents: list[AgentConfig] = field(default_factory=list)
-    communication_mode: str = "hybrid"
     created_at: str = ""
 
     def save(self, project_dir: Path) -> None:
@@ -805,7 +804,7 @@ def generate_root_claude_md(config: TeamConfig) -> str:
     lines.append("- **User to PM**: Claude Code conversation (direct)")
     lines.append(
         "- **PM to Apple Engineer**: task spec via `byfrost/tasks/apple/current.md` "
-        "(SSHFS) + bridge trigger (`byfrost send`)"
+        "(bridge-synced) + bridge trigger (`byfrost send`)"
     )
     lines.append(
         "- **Apple Engineer to PM**: streamed terminal output + `task.complete` over bridge"
@@ -936,19 +935,8 @@ def _run_init_impl(project_dir: Path) -> int:
 
 
 def _init_custom(project_dir: Path) -> int:
-    """Custom team setup - minimal dirs + communication mode."""
+    """Custom team setup - minimal coordination dirs."""
     print()
-    mode_idx = _prompt_choice(
-        "Communication mode:",
-        [
-            "Full Git - all files sync via git",
-            "Full SSHFS - all files sync via SSHFS mounts",
-            "Hybrid - SSHFS for coordination, git for code",
-        ],
-        default=2,
-    )
-    mode = ["git", "sshfs", "hybrid"][mode_idx]
-
     project_name = _prompt("Project name", default=project_dir.name)
 
     config = TeamConfig(
@@ -956,7 +944,6 @@ def _init_custom(project_dir: Path) -> int:
         controller_hostname="",
         worker_hostname="",
         team_size=0,
-        communication_mode=mode,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -1239,7 +1226,6 @@ def _build_auto_config(
         worker_hostname=worker_hostname,
         team_size=team_size,
         agents=agents,
-        communication_mode="hybrid",
         created_at=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -1487,7 +1473,7 @@ def _init_default_team(project_dir: Path) -> int:
     print()
     _print_status("Next steps:")
     _print_status("  1. Review generated CLAUDE.md files")
-    _print_status("  2. Configure SSHFS mounts (byfrost sshfs)")
+    _print_status("  2. Start file sync (byfrost sync start)")
     _print_status("  3. Start your first compound cycle!")
 
     return 0

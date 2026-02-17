@@ -56,7 +56,7 @@ Task: byfrost/tasks/apple/current.md
 ```
 
 You are parsing the terminal stream only. You do not read `apple/`
-directly during this phase. Because `byfrost/qa/` is SSHFS-mounted, the PM
+directly during this phase. Because `byfrost/qa/` is bridge-synced, the PM
 can see your inventory updating live.
 
 ## Job 2: 8-Lens Review (Review Phase)
@@ -140,8 +140,8 @@ Overall: PASS / PASS WITH FLAGS / FAIL
 - [be specific: "silently swallows network error on line 47" not "error handling could be better"]
 ```
 
-The PM and Apple Engineer can see this report immediately through the
-SSHFS mount.
+The PM and Apple Engineer can see this report immediately through
+bridge file sync.
 
 ## File Ownership
 

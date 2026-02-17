@@ -654,6 +654,15 @@ class ByfrostDaemon:
             config, logger, on_secret_rotated=self._refresh_signers,
         )
 
+        # File sync for coordination directories
+        from daemon.file_sync import DaemonFileSync
+        self.file_sync = DaemonFileSync(
+            project_path=config.get("project_path", ""),
+            broadcast_fn=self._broadcast,
+            send_fn=self._send,
+            logger=logger,
+        )
+
     def _refresh_signers(self) -> None:
         """Reload HMAC signers after secret rotation."""
         valid = SecretManager.get_valid_secrets()
@@ -729,7 +738,15 @@ class ByfrostDaemon:
                     "session.attach": self._handle_attach,
                     "ping": self._handle_ping,
                     "project.info": self._handle_project_info,
+                    "file.sync": self.file_sync.handle_file_sync,
+                    "file.changed": self.file_sync.handle_file_sync,
                 }.get(msg_type)
+
+                # Send file manifest on first authenticated message
+                if not getattr(websocket, "_manifest_sent", False):
+                    websocket._manifest_sent = True  # type: ignore[attr-defined]
+                    if self.config.get("project_path"):
+                        await self.file_sync.send_full_manifest(websocket)
 
                 if handler:
                     await handler(websocket, msg, source)
@@ -1187,6 +1204,13 @@ class ByfrostDaemon:
         # Start health monitor
         health_task = asyncio.create_task(self._health_loop())
 
+        # Start file sync watcher
+        file_sync_task = None
+        if self.config.get("project_path"):
+            file_sync_task = asyncio.create_task(
+                self.file_sync.start(asyncio.get_event_loop())
+            )
+
         # Start WebSocket server
         try:
             async with serve(
@@ -1204,6 +1228,9 @@ class ByfrostDaemon:
             self.log.info("Server shutting down...")
         finally:
             health_task.cancel()
+            if file_sync_task:
+                file_sync_task.cancel()
+            await self.file_sync.stop()
             await self.server_client.stop()
             self._running = False
 

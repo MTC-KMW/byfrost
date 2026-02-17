@@ -1102,12 +1102,11 @@ def main():
         "agent", nargs="?", help="Agent to add/remove (backend or frontend)",
     )
 
-    # byfrost sshfs
-    p_sshfs = sub.add_parser("sshfs", help="Configure SSHFS mounts (Mac worker)")
-    p_sshfs.add_argument(
-        "action", nargs="?", default="setup",
-        choices=["setup", "mount", "unmount", "remount", "status"],
-        help="SSHFS action (default: setup)",
+    # byfrost sync
+    p_sync = sub.add_parser("sync", help="File sync for coordination directories")
+    p_sync.add_argument(
+        "action", choices=["start", "stop", "status"],
+        help="Sync action",
     )
 
     # byfrost send
@@ -1172,9 +1171,9 @@ def main():
     if args.command == "team":
         from agents.team import run_team_command
         sys.exit(run_team_command(args.action, args.agent, Path.cwd()))
-    if args.command == "sshfs":
-        from cli.sshfs_config import run_sshfs_command
-        sys.exit(run_sshfs_command(args.action, Path.cwd()))
+    if args.command == "sync":
+        from cli.file_sync import run_sync_command
+        sys.exit(run_sync_command(args.action, Path.cwd()))
 
     # All remaining commands need daemon config + WebSocket
     # Refresh worker addresses from the server before connecting

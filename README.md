@@ -54,13 +54,13 @@ cd server && pytest tests/ -v   # server tests (84)
 ```
 core/        Shared Python (security, protocol, config)
 daemon/      Mac worker daemon (WebSocket, tmux, task queue)
-cli/         Cross-platform CLI (byfrost command, daemon management, SSHFS config)
+cli/         Cross-platform CLI (byfrost command, daemon management, file sync)
 server/      Coordination server (FastAPI, OAuth, CA)
 agents/      End-user deliverable templates (byfrost init + byfrost team)
 mac-app/     macOS SwiftUI menu bar app (GUI)
 linux-app/   Linux GTK 4 tray app (GUI)
 windows-app/ Windows WPF system tray controller (GUI)
-deploy/      launchd plist, systemd unit, setup scripts, SSHFS mount
+deploy/      launchd plist, systemd unit, setup scripts
 tests/       Cross-module tests
 ```
 

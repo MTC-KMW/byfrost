@@ -58,7 +58,6 @@ def _make_config(
         worker_hostname="mac-mini",
         team_size=team_size,
         agents=agents,
-        communication_mode="hybrid",
         created_at="2026-02-16T00:00:00Z",
     )
 

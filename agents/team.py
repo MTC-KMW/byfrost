@@ -47,7 +47,6 @@ def team_status(project_dir: Path) -> int:
         return 1
 
     _print_status(f"Team: {config.project_name} ({config.team_size} agents)")
-    _print_status(f"Communication: {config.communication_mode}")
     print()
 
     # Header

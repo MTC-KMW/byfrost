@@ -188,7 +188,6 @@ def _make_config(
         worker_hostname="mac-mini",
         team_size=team_size,
         agents=agents,
-        communication_mode="hybrid",
         created_at="2026-02-16T00:00:00Z",
     )
 
@@ -550,7 +549,6 @@ class TestInitWizard:
     def test_custom_mode(self, tmp_path: Path) -> None:
         inputs = iter([
             "n",          # Don't install default team
-            "3",          # Hybrid mode
             "TestApp",    # Project name
         ])
 
@@ -562,7 +560,6 @@ class TestInitWizard:
         assert (tmp_path / BF / ".byfrost-team.json").exists()
         config = TeamConfig.load(tmp_path)
         assert config is not None
-        assert config.communication_mode == "hybrid"
         assert config.team_size == 0
 
     def test_reinit_decline(self, tmp_path: Path) -> None:

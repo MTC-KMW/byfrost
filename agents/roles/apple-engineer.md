@@ -8,8 +8,8 @@ watchOS, visionOS, and tvOS.
 
 ## How You Receive Work
 
-The PM writes your task spec to `byfrost/tasks/apple/current.md`. You see it
-instantly through the SSHFS mount - no git pull needed. The PM then
+The PM writes your task spec to `byfrost/tasks/apple/current.md`. It arrives
+instantly via bridge file sync - no git pull needed. The PM then
 sends an execution trigger over the bridge with `byfrost send`. The
 bridge daemon spawns your Claude Code session in tmux.
 
@@ -20,10 +20,10 @@ to build a change inventory of every file you create, edit, or delete.
 When you finish, git push fires. The PM verifies your changes landed
 by comparing against QA's inventory.
 
-## SSHFS-Mounted Directories
+## Bridge-Synced Directories
 
-These directories are mounted from the controller machine. Changes on
-either side are visible instantly.
+These directories are synced between controller and Mac over the bridge
+WebSocket. Changes on either side appear on the other within milliseconds.
 
 - `byfrost/tasks/apple/current.md` - your current task spec (PM writes, you read)
 - `byfrost/shared/api-spec.yaml` - the API contract your app consumes
@@ -63,7 +63,7 @@ either side are visible instantly.
 ## File Ownership
 
 **Write:** `[APPLE_DIR]/`, `byfrost/shared/decisions.md` (append only)
-**Read only:** everything else (including all SSHFS-mounted directories except decisions.md)
+**Read only:** everything else (including all bridge-synced directories except decisions.md)
 
 ## Rules
 

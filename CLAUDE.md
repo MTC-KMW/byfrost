@@ -16,13 +16,13 @@ Do not skip ahead to later phases.
 
 - `core/` - shared Python: security (TLS, HMAC, sanitization, rate limiting, audit), wire protocol, config
 - `daemon/` - Mac worker: WebSocket server, tmux session manager, task queue, git ops, server heartbeat
-- `cli/` - cross-platform CLI: `byfrost` command with login, connect, init, team, send, status, daemon management, SSHFS config
+- `cli/` - cross-platform CLI: `byfrost` command with login, connect, init, team, send, status, daemon management, file sync
 - `server/` - coordination server: FastAPI, GitHub OAuth (browser + device flow), device registration, per-pairing CA, HMAC secrets
 - `agents/` - end-user deliverable templates that `byfrost init` processes (NOT dev docs). Includes `team.py` for add/remove/status with partial regeneration.
 - `mac-app/` - SwiftUI menu bar app (GUI, optional on headless Macs)
 - `linux-app/` - GTK 4 tray app (GUI, optional on headless Linux)
 - `windows-app/` - WPF system tray controller (GUI, optional on headless Windows)
-- `deploy/` - launchd plist, systemd unit, setup scripts, SSHFS mount/unmount/remount
+- `deploy/` - launchd plist, systemd unit, setup scripts
 
 ## Development Guidelines
 
@@ -45,14 +45,13 @@ Byfrost ships with an optional default agent team (the "Berserkers" in
 end-user docs). Users choose during `byfrost init` whether to install
 it or bring their own agents.
 
-- Default team uses Hybrid communication: SSHFS for coordination files, git for code
-- Custom teams choose from Full Git, Full SSHFS, or Hybrid
+- Default team uses bridge file sync for coordination files, git for code
 - Team tiers: 3 (PM + Apple Engineer + QA), 4 (add backend or frontend), 5 (all five)
 - QA is always required
 - `byfrost team add/remove/status` modifies the team after setup
 - Role templates use section markers (`<!-- byfrost:team -->` etc.) for partial regeneration
 - `agents/team.py` handles add/remove/status and rewrites only managed blocks
-- SSHFS mounts coordination directories (tasks/, shared/, compound/, pm/, qa/) on the Mac
+- Bridge syncs coordination directories (tasks/, shared/, compound/, pm/, qa/) over WebSocket
 - Code directories (apple/, backend/, web/) sync via git only
 
 See `byfrost-build-plan.md` Section 10 for the full agent team spec.
