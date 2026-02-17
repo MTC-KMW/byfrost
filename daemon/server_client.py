@@ -58,20 +58,28 @@ def detect_addresses(port: int = DEFAULT_PORT) -> dict[str, Any]:
         addresses["local_ip"] = "127.0.0.1"
 
     # Tailscale IP: scan all network interfaces for 100.x.y.z (CGNAT range)
+    import re
     import subprocess
-    try:
-        # Works on both macOS (ifconfig) and Linux (ip addr)
-        result = subprocess.run(
-            ["ifconfig"] if sys.platform == "darwin" else ["ip", "-4", "addr"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0:
-            import re
-            for match in re.finditer(r"inet\s+(100\.\d+\.\d+\.\d+)", result.stdout):
-                addresses["tailscale_ip"] = match.group(1)
+
+    # Use full paths - launchd/systemd may have minimal PATH
+    if sys.platform == "darwin":
+        net_cmds = [["/sbin/ifconfig"], ["ifconfig"]]
+    else:
+        net_cmds = [["/sbin/ip", "-4", "addr"], ["ip", "-4", "addr"]]
+
+    for cmd in net_cmds:
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                for match in re.finditer(r"inet\s+(100\.\d+\.\d+\.\d+)", result.stdout):
+                    addresses["tailscale_ip"] = match.group(1)
+                    break
+            if "tailscale_ip" in addresses:
                 break
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
 
     return addresses
 
