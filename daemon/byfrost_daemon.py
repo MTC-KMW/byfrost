@@ -151,8 +151,8 @@ def discover_project_path(log) -> Optional[str]:
     """
     cwd = Path.cwd()
 
-    # 1. Check cwd
-    if _has_project_indicators(cwd):
+    # 1. Check cwd (skip if cwd name is in the skip list, e.g. the byfrost repo)
+    if cwd.name not in _SKIP_DIRS and _has_project_indicators(cwd):
         log.info(f"Auto-discover: found project at cwd ({cwd})")
         return str(cwd)
 
