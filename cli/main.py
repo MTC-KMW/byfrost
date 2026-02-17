@@ -1050,6 +1050,41 @@ def _do_daemon(action: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Project path management
+# ---------------------------------------------------------------------------
+
+
+def _do_set_project(path_arg: str | None) -> int:
+    """Set the daemon's project path (persisted to ~/.byfrost/daemon.json).
+
+    Returns 0 on success, 1 on failure.
+    """
+    from core.config import load_daemon_config, save_daemon_config
+
+    if not path_arg:
+        cfg = load_daemon_config()
+        current = cfg.get("project_path")
+        if current:
+            _print_status(f"Project path: {current}")
+        else:
+            _print_status("No project path set.")
+            _print_status("Usage: byfrost daemon set-project /path/to/project")
+        return 0
+
+    project = Path(path_arg).resolve()
+    if not project.is_dir():
+        _print_error(f"Not a directory: {project}")
+        return 1
+
+    cfg = load_daemon_config()
+    cfg["project_path"] = str(project)
+    save_daemon_config(cfg)
+    _print_status(f"Project path set: {project}")
+    _print_status("Restart the daemon to apply: byfrost daemon restart")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI Entry Point
 # ---------------------------------------------------------------------------
 
@@ -1086,9 +1121,10 @@ def main():
     p_daemon = sub.add_parser("daemon", help="Manage the byfrost daemon service")
     p_daemon.add_argument(
         "action",
-        choices=["install", "uninstall", "start", "stop", "restart", "status"],
+        choices=["install", "uninstall", "start", "stop", "restart", "status", "set-project"],
         help="Daemon action",
     )
+    p_daemon.add_argument("path", nargs="?", help="Project path (for set-project)")
 
     # byfrost init / uninit
     sub.add_parser("init", help="Set up agent team in current project")
@@ -1165,7 +1201,10 @@ def main():
     if args.command == "logout":
         sys.exit(asyncio.run(_do_logout()))
     if args.command == "daemon":
-        sys.exit(_do_daemon(args.action))
+        if args.action == "set-project":
+            sys.exit(_do_set_project(getattr(args, "path", None)))
+        else:
+            sys.exit(_do_daemon(args.action))
     if args.command == "init":
         from agents.init import run_init_wizard
         sys.exit(run_init_wizard(Path.cwd()))

@@ -5,6 +5,7 @@ All modules import path constants from here. The ~/.byfrost/ directory
 is the single location for credentials, logs, and state.
 """
 
+import json
 from pathlib import Path
 from typing import Callable
 
@@ -18,6 +19,7 @@ LOG_DIR = BRIDGE_DIR / "logs"
 SECRET_FILE = BRIDGE_DIR / "secret"
 SECRET_HISTORY_FILE = BRIDGE_DIR / "secret.history"
 AUTH_FILE = BRIDGE_DIR / "auth.json"
+DAEMON_CONFIG_FILE = BRIDGE_DIR / "daemon.json"
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -25,6 +27,24 @@ AUTH_FILE = BRIDGE_DIR / "auth.json"
 
 DEFAULT_PORT = 9784
 DEFAULT_SERVER_URL = "https://byfrost-server.fly.dev"
+
+# ---------------------------------------------------------------------------
+# Daemon config persistence
+# ---------------------------------------------------------------------------
+
+
+def load_daemon_config() -> dict:
+    """Load persistent daemon config from ~/.byfrost/daemon.json."""
+    if DAEMON_CONFIG_FILE.exists():
+        return json.loads(DAEMON_CONFIG_FILE.read_text())  # type: ignore[no-any-return]
+    return {}
+
+
+def save_daemon_config(config: dict) -> None:
+    """Save persistent daemon config to ~/.byfrost/daemon.json."""
+    BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
+    DAEMON_CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
+
 
 # ---------------------------------------------------------------------------
 # Shared config helpers

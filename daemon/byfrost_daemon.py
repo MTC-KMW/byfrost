@@ -91,6 +91,13 @@ def load_config():
             source_env_file(cfg_file, config, _daemon_env_map)
             break
 
+    # Load persistent config from ~/.byfrost/daemon.json
+    # Priority: env vars > config.env > daemon.json > auto-discovery
+    from core.config import load_daemon_config
+    daemon_cfg = load_daemon_config()
+    if not config["project_path"] and daemon_cfg.get("project_path"):
+        config["project_path"] = daemon_cfg["project_path"]
+
     if not config["secret"]:
         config["secret"] = SecretManager.load()
     if not config["secret"]:
@@ -113,7 +120,7 @@ _PROJECT_INDICATORS = (
 _SKIP_DIRS = {
     "node_modules", "venv", ".venv", "__pycache__", "build", "dist",
     ".git", ".hg", ".svn", "DerivedData", "Pods", ".build",
-    "target", "vendor", "env",
+    "target", "vendor", "env", "byfrost",
 }
 
 # macOS protected dirs - searching these may trigger permission prompts.
@@ -235,6 +242,12 @@ def validate_project_path(config: dict, log) -> None:
     if discovered:
         config["project_path"] = discovered
         log.info(f"Using discovered project: {discovered}")
+        # Persist so auto-discovery doesn't need to run again
+        from core.config import load_daemon_config, save_daemon_config
+        daemon_cfg = load_daemon_config()
+        daemon_cfg["project_path"] = discovered
+        save_daemon_config(daemon_cfg)
+        log.info("Saved project path to ~/.byfrost/daemon.json")
     else:
         log.warning(
             "No project found. Set MAC_PROJECT_PATH to the absolute path "
