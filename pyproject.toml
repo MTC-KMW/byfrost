@@ -7,7 +7,7 @@ name = "byfrost"
 version = "0.1.0"
 description = "Secure bridge for real-time remote Claude Code execution"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = {text = "Elastic-2.0"}
 requires-python = ">=3.11"
 dependencies = [
     "websockets>=12.0",

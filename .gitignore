@@ -46,6 +46,9 @@ secret
 secret.history
 auth.json
 
+# Build plan (internal, not committed)
+byfrost-build-plan.md
+
 # Environment files
 .env
 .env.local
