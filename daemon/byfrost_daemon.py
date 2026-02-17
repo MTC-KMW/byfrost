@@ -755,17 +755,18 @@ class ByfrostDaemon:
                     "file.changed": self.file_sync.handle_file_sync,
                 }.get(msg_type)
 
-                # Send file manifest on first authenticated message
-                if not getattr(websocket, "_manifest_sent", False):
-                    websocket._manifest_sent = True  # type: ignore[attr-defined]
-                    if self.config.get("project_path"):
-                        await self.file_sync.send_full_manifest(websocket)
-
                 if handler:
                     await handler(websocket, msg, source)
                 else:
                     await self._send(websocket, "error",
                                      {"message": f"Unknown message type: {msg_type}"})
+
+                # Send file manifest after the first handler response,
+                # so one-shot commands (ping, status) get their reply first
+                if not getattr(websocket, "_manifest_sent", False):
+                    websocket._manifest_sent = True  # type: ignore[attr-defined]
+                    if self.config.get("project_path"):
+                        await self.file_sync.send_full_manifest(websocket)
 
         except websockets.exceptions.ConnectionClosed:
             self.log.info(f"Client disconnected: {source}")
