@@ -135,6 +135,8 @@ class SyncClient:
 
     async def run(self) -> None:
         """Main loop: watch files and maintain WebSocket connection."""
+        import ssl as _ssl
+
         self._loop = asyncio.get_event_loop()
         self._start_watcher()
         self.log.info(f"Sync client started for {self.project_dir}")
@@ -142,6 +144,9 @@ class SyncClient:
         while self._running:
             try:
                 await self._connect_and_sync()
+            except _ssl.SSLError as e:
+                self.log.error(f"TLS error: {e}. Fix certs or re-run 'byfrost connect'.")
+                break
             except (ConnectionRefusedError, OSError) as e:
                 self.log.warning(f"Connection failed: {e}. Retrying in {RECONNECT_DELAY}s...")
                 await asyncio.sleep(RECONNECT_DELAY)
@@ -419,12 +424,13 @@ class SyncClient:
         return f"{protocol}://{self.config['host']}:{self.config['port']}"
 
     def _get_ssl_context(self):  # type: ignore[return]
-        """Get TLS context for mTLS connection."""
+        """Get TLS context for mTLS connection.
+
+        When TLS certs are present, failure to load them raises rather
+        than silently degrading to plaintext.
+        """
         if self._use_tls:
-            try:
-                return TLSManager.get_client_ssl_context()
-            except Exception as e:
-                self.log.warning(f"TLS setup failed: {e}, using plaintext")
+            return TLSManager.get_client_ssl_context()
         return None
 
     def stop(self) -> None:
