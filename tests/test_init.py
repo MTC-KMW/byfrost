@@ -442,18 +442,30 @@ class TestMergeExistingCLAUDE:
 
 
 class TestInitWizard:
-    """Full wizard flow with mocked input."""
+    """Full wizard flow with mocked input.
+
+    Network calls (_detect_byfrost_connection, _fetch_worker_project_info)
+    are mocked because CI has no server or daemon. This simulates a real
+    user who hasn't connected a worker yet -- worker_hostname is empty,
+    so the wizard prompts for it (reflected in the input sequences below).
+    """
+
+    def _run_wizard(self, tmp_path: Path, inputs: list[str]) -> int:
+        """Run the wizard with mocked network calls and user inputs."""
+        input_iter = iter(inputs)
+        with patch("agents.init._detect_byfrost_connection", return_value={}), \
+                patch("agents.init._fetch_worker_project_info", return_value={}), \
+                patch("builtins.input", lambda _: next(input_iter)):
+            from agents.init import run_init_wizard
+            return run_init_wizard(tmp_path)
 
     def test_3_agent_team(self, tmp_path: Path) -> None:
         """Auto-detect finds no stacks -> 3 agents. User confirms."""
-        inputs = iter([
-            "y",    # Install default team?
-            "y",    # Look good? (auto-detected 3 agents)
+        result = self._run_wizard(tmp_path, [
+            "y",          # Install default team?
+            "test-mac",   # Worker (Mac) hostname (not auto-detected)
+            "y",          # Look good?
         ])
-
-        with patch("builtins.input", lambda _: next(inputs)):
-            from agents.init import run_init_wizard
-            result = run_init_wizard(tmp_path)
 
         assert result == 0
         assert (tmp_path / "CLAUDE.md").exists()
@@ -480,14 +492,11 @@ class TestInitWizard:
         }))
         (tmp_path / "app.py").write_text("from flask import Flask\napp = Flask(__name__)\n")
 
-        inputs = iter([
-            "y",    # Install default team?
-            "y",    # Look good? (auto-detected 5 agents)
+        result = self._run_wizard(tmp_path, [
+            "y",          # Install default team?
+            "test-mac",   # Worker (Mac) hostname
+            "y",          # Look good?
         ])
-
-        with patch("builtins.input", lambda _: next(inputs)):
-            from agents.init import run_init_wizard
-            result = run_init_wizard(tmp_path)
 
         assert result == 0
 
@@ -514,14 +523,11 @@ class TestInitWizard:
         """Auto-detect finds backend but no frontend -> 4 agents."""
         (tmp_path / "requirements.txt").write_text("fastapi\nuvicorn\n")
 
-        inputs = iter([
-            "y",    # Install default team?
-            "y",    # Look good?
+        result = self._run_wizard(tmp_path, [
+            "y",          # Install default team?
+            "test-mac",   # Worker (Mac) hostname
+            "y",          # Look good?
         ])
-
-        with patch("builtins.input", lambda _: next(inputs)):
-            from agents.init import run_init_wizard
-            result = run_init_wizard(tmp_path)
 
         assert result == 0
         config = TeamConfig.load(tmp_path)
@@ -532,14 +538,11 @@ class TestInitWizard:
 
     def test_cancel_at_confirmation(self, tmp_path: Path) -> None:
         """User says 'n' at confirmation -> no files created."""
-        inputs = iter([
-            "y",    # Install default team?
-            "n",    # Look good? -> No
+        result = self._run_wizard(tmp_path, [
+            "y",          # Install default team?
+            "test-mac",   # Worker (Mac) hostname
+            "n",          # Look good? -> No
         ])
-
-        with patch("builtins.input", lambda _: next(inputs)):
-            from agents.init import run_init_wizard
-            result = run_init_wizard(tmp_path)
 
         assert result == 0
         assert not (tmp_path / BF / ".byfrost-team.json").exists()
@@ -586,12 +589,10 @@ class TestInitWizard:
         original = "# My CRM App\n\nThis is my project.\n"
         (tmp_path / "CLAUDE.md").write_text(original)
 
-        inputs = iter(["y", "y"])
-        with patch("builtins.input", lambda _: next(inputs)):
-            from agents.init import run_init_wizard
-            run_init_wizard(tmp_path)
+        result = self._run_wizard(tmp_path, ["y", "test-mac", "y"])
 
         content = (tmp_path / "CLAUDE.md").read_text()
+        assert result == 0
         assert "My CRM App" in content
         assert "This is my project" in content
         assert "Byfrost Agent Team" in content

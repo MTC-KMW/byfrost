@@ -215,7 +215,7 @@ def detect_project_stacks(project_dir: Path) -> dict[str, list[str]]:
                 if "*" in indicator:
                     results = list(search_dir.glob(indicator))
                     if results:
-                        matches.append(results[0].name)
+                        matches.append(str(results[0].name))
                 elif (search_dir / indicator).exists():
                     matches.append(indicator)
             if matches:
@@ -235,7 +235,7 @@ def detect_project_name(project_dir: Path) -> str:
     if pkg_json.exists():
         try:
             pkg = json.loads(pkg_json.read_text())
-            name = pkg.get("name", "")
+            name: str = pkg.get("name", "")
             if name and not name.startswith("@"):
                 return name
         except (json.JSONDecodeError, OSError):
