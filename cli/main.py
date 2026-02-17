@@ -1090,8 +1090,9 @@ def main():
         help="Daemon action",
     )
 
-    # byfrost init
+    # byfrost init / uninit
     sub.add_parser("init", help="Set up agent team in current project")
+    sub.add_parser("uninit", help="Remove byfrost from this project")
 
     # byfrost team
     p_team = sub.add_parser("team", help="Manage agent team")
@@ -1168,6 +1169,9 @@ def main():
     if args.command == "init":
         from agents.init import run_init_wizard
         sys.exit(run_init_wizard(Path.cwd()))
+    if args.command == "uninit":
+        from agents.uninit import run_uninit_wizard
+        sys.exit(run_uninit_wizard(Path.cwd()))
     if args.command == "team":
         from agents.team import run_team_command
         sys.exit(run_team_command(args.action, args.agent, Path.cwd()))
