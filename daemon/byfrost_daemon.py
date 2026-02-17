@@ -434,14 +434,12 @@ class SessionManager:
 
         # Build the claude command
         # Use -p (print mode) for autonomous execution
-        # --output-format stream-json for structured output
         # Prompt is sanitized via shlex.quote() for shell safety
         safe_prompt = PromptSanitizer.sanitize(task.prompt)
         claude_cmd = (
             f'cd {project} && '
             f'{claude} -p '
             f'--allowedTools "{tools}" '
-            f'--output-format stream-json '
             f'{safe_prompt}'
         )
 
