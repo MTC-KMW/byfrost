@@ -50,6 +50,4 @@ product architecture and phased implementation plan.
 3. Conventional commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`)
 4. Open a PR against `main`
 
-## License
 
-Apache 2.0 - see [LICENSE](LICENSE)
