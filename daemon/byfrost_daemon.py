@@ -438,9 +438,8 @@ class SessionManager:
         safe_prompt = PromptSanitizer.sanitize(task.prompt)
         claude_cmd = (
             f'cd {project} && '
-            f'{claude} -p '
-            f'--allowedTools "{tools}" '
-            f'{safe_prompt}'
+            f'{claude} -p {safe_prompt} '
+            f'--allowedTools "{tools}"'
         )
 
         # Create tmux session running the command
