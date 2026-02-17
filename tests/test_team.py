@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agents.init import (
+    BYFROST_SUBDIR,
     AgentConfig,
     TeamConfig,
     generate_root_claude_md,
@@ -18,6 +19,8 @@ from agents.team import (
     team_remove,
     team_status,
 )
+
+BF = BYFROST_SUBDIR  # shorthand for assertions
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -69,9 +72,11 @@ def _setup_project(tmp_path: Path, config: TeamConfig) -> None:
     # Generate PM CLAUDE.md from template
     write_role_claude_mds(tmp_path, config, values, active_tags)
 
-    # Generate root CLAUDE.md
+    # Generate root CLAUDE.md (under byfrost/)
     root_content = generate_root_claude_md(config)
-    (tmp_path / "CLAUDE.md").write_text(root_content)
+    bf_dir = tmp_path / BF
+    bf_dir.mkdir(parents=True, exist_ok=True)
+    (bf_dir / "CLAUDE.md").write_text(root_content)
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +128,11 @@ class TestTeamAdd:
         assert loaded.team_size == 4
         assert loaded.has_agent("backend") is True
 
-        # Agent CLAUDE.md created
-        assert (tmp_path / "backend" / "CLAUDE.md").exists()
+        # Agent CLAUDE.md created under byfrost/
+        assert (tmp_path / BF / "backend" / "CLAUDE.md").exists()
 
-        # Task stub created
-        assert (tmp_path / "tasks" / "backend" / "current.md").exists()
+        # Task stub created under byfrost/
+        assert (tmp_path / BF / "tasks" / "backend" / "current.md").exists()
 
     @patch("agents.team._prompt", side_effect=[
         "web", "React", "npm run dev", "3000", "npm run build", "npm test",
@@ -143,8 +148,8 @@ class TestTeamAdd:
         assert loaded is not None
         assert loaded.team_size == 4
         assert loaded.has_agent("frontend") is True
-        assert (tmp_path / "web" / "CLAUDE.md").exists()
-        assert (tmp_path / "tasks" / "web" / "current.md").exists()
+        assert (tmp_path / BF / "frontend" / "CLAUDE.md").exists()
+        assert (tmp_path / BF / "tasks" / "web" / "current.md").exists()
 
     def test_add_duplicate_backend(self, tmp_path: Path) -> None:
         config = _make_config(4, has_backend=True)
@@ -185,8 +190,8 @@ class TestTeamRemove:
         assert loaded.team_size == 3
         assert loaded.has_agent("backend") is False
 
-        # CLAUDE.md deleted
-        assert not (tmp_path / "backend" / "CLAUDE.md").exists()
+        # CLAUDE.md deleted from byfrost/
+        assert not (tmp_path / BF / "backend" / "CLAUDE.md").exists()
 
     def test_remove_frontend(self, tmp_path: Path) -> None:
         config = _make_config(4, has_frontend=True)
@@ -246,7 +251,8 @@ class TestPartialRegenPM:
         config = _make_config(3)
         _setup_project(tmp_path, config)
 
-        pm_before = (tmp_path / "pm" / "CLAUDE.md").read_text()
+        pm_path = tmp_path / BF / "pm" / "CLAUDE.md"
+        pm_before = pm_path.read_text()
         assert "Back End Engineer" not in pm_before or "you handle this directly" in pm_before
 
         # Simulate adding backend
@@ -260,7 +266,7 @@ class TestPartialRegenPM:
 
         _partial_regen_pm(tmp_path, config)
 
-        pm_after = (tmp_path / "pm" / "CLAUDE.md").read_text()
+        pm_after = pm_path.read_text()
         # Team section should now list backend
         assert "**Back End Engineer**: controller" in pm_after
         # IFNOT:BACKEND block should be gone (PM no longer handles it directly)
@@ -272,7 +278,7 @@ class TestPartialRegenPM:
         _setup_project(tmp_path, config)
 
         # Add custom content outside markers
-        pm_path = tmp_path / "pm" / "CLAUDE.md"
+        pm_path = tmp_path / BF / "pm" / "CLAUDE.md"
         content = pm_path.read_text()
         content += "\n## My Custom Rules\n\nDo not delete this.\n"
         pm_path.write_text(content)
@@ -299,7 +305,8 @@ class TestPartialRegenRoot:
         config = _make_config(3)
         _setup_project(tmp_path, config)
 
-        root_before = (tmp_path / "CLAUDE.md").read_text()
+        root_path = tmp_path / BF / "CLAUDE.md"
+        root_before = root_path.read_text()
         assert "Back End Engineer" not in root_before
 
         config.agents.append(AgentConfig(role="backend", directory="backend", settings={
@@ -311,14 +318,14 @@ class TestPartialRegenRoot:
         config.team_size = 4
         _partial_regen_root(tmp_path, config)
 
-        root_after = (tmp_path / "CLAUDE.md").read_text()
+        root_after = root_path.read_text()
         assert "Back End Engineer" in root_after
 
     def test_non_marker_content_preserved(self, tmp_path: Path) -> None:
         config = _make_config(3)
         _setup_project(tmp_path, config)
 
-        root_path = tmp_path / "CLAUDE.md"
+        root_path = tmp_path / BF / "CLAUDE.md"
         content = root_path.read_text()
         content += "\n## Project Notes\n\nKeep this.\n"
         root_path.write_text(content)

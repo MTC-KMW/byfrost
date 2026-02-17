@@ -18,11 +18,11 @@ something from the Apple stack, tell the PM.
 
 ## Before Every Task
 
-1. `compound/patterns.md` - entries tagged (Front End) and (All)
-2. `compound/anti-patterns.md` - entries tagged (Front End) and (All)
+1. `byfrost/compound/patterns.md` - entries tagged (Front End) and (All)
+2. `byfrost/compound/anti-patterns.md` - entries tagged (Front End) and (All)
 3. Task spec from PM (delivered via Agent Teams)
-4. `shared/api-spec.yaml` - the API contract you consume
-5. `shared/decisions.md` - recent cross-agent decisions
+4. `byfrost/shared/api-spec.yaml` - the API contract you consume
+5. `byfrost/shared/decisions.md` - recent cross-agent decisions
 
 ## Workflow
 
@@ -34,7 +34,7 @@ something from the Apple stack, tell the PM.
 5. Verify dev server runs without errors
 6. Write and run tests
 7. Commit with conventional prefix (`feat:`, `fix:`, `refactor:`)
-8. Note decisions in `shared/decisions.md` (append only)
+8. Note decisions in `byfrost/shared/decisions.md` (append only)
 9. Tell PM you are done via Agent Teams
 
 ## Project
@@ -48,14 +48,14 @@ something from the Apple stack, tell the PM.
 
 ## File Ownership
 
-**Write:** `[FRONTEND_DIR]/`, `shared/decisions.md` (append only)
+**Write:** `[FRONTEND_DIR]/`, `byfrost/shared/decisions.md` (append only)
 **Read only:** everything else
 
 ## Rules
 
 1. Always read compound knowledge before coding
 2. Follow patterns and avoid anti-patterns referenced by number in the task spec
-3. Build against the API contract - if wrong, note in `shared/decisions.md` and implement anyway
+3. Build against the API contract - if wrong, note in `byfrost/shared/decisions.md` and implement anyway
 4. Environment variables for all API URLs and config
 5. Sanitize user input before rendering (XSS)
 6. Semantic HTML, ARIA labels, keyboard navigation

@@ -18,11 +18,11 @@ something from the Apple stack, tell the PM.
 
 ## Before Every Task
 
-1. `compound/patterns.md` - entries tagged (Back End) and (All)
-2. `compound/anti-patterns.md` - entries tagged (Back End) and (All)
+1. `byfrost/compound/patterns.md` - entries tagged (Back End) and (All)
+2. `byfrost/compound/anti-patterns.md` - entries tagged (Back End) and (All)
 3. Task spec from PM (delivered via Agent Teams)
-4. `shared/api-spec.yaml` - the contract you implement
-5. `shared/decisions.md` - recent cross-agent decisions
+4. `byfrost/shared/api-spec.yaml` - the contract you implement
+5. `byfrost/shared/decisions.md` - recent cross-agent decisions
 
 ## Workflow
 
@@ -32,9 +32,9 @@ something from the Apple stack, tell the PM.
 3. Read API contract for endpoints you are building
 4. Implement the feature
 5. Write and run tests
-6. Verify response shapes match `shared/api-spec.yaml`
+6. Verify response shapes match `byfrost/shared/api-spec.yaml`
 7. Commit with conventional prefix (`feat:`, `fix:`, `refactor:`)
-8. Note decisions in `shared/decisions.md` (append only)
+8. Note decisions in `byfrost/shared/decisions.md` (append only)
 9. Tell PM you are done via Agent Teams
 
 ## Project
@@ -49,14 +49,14 @@ something from the Apple stack, tell the PM.
 
 ## File Ownership
 
-**Write:** `[BACKEND_DIR]/`, `shared/decisions.md` (append only)
+**Write:** `[BACKEND_DIR]/`, `byfrost/shared/decisions.md` (append only)
 **Read only:** everything else
 
 ## Rules
 
 1. Always read compound knowledge before coding
 2. Follow patterns and avoid anti-patterns referenced by number in the task spec
-3. Implement to the API contract - if wrong, note in `shared/decisions.md` and implement anyway
+3. Implement to the API contract - if wrong, note in `byfrost/shared/decisions.md` and implement anyway
 4. Every endpoint gets a test
 5. Handle errors consistently across all endpoints
 6. Never hardcode secrets or env-specific values

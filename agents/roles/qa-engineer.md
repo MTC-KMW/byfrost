@@ -14,7 +14,7 @@ change inventory and review reports.
 ## Communication
 
 - **PM to you**: Agent Teams messaging (task dispatch, review trigger)
-- **You to PM**: Agent Teams messaging + files in `qa/`
+- **You to PM**: Agent Teams messaging + files in `byfrost/qa/`
 - **Apple Engineer to you**: bridge WebSocket stream (read-only via `byfrost attach`)
 
 You never talk to the Apple Engineer directly.
@@ -32,12 +32,12 @@ byfrost attach
 
 This streams the Apple Engineer's full terminal output in real time.
 As you see file operations in the Claude Code output, write a structured
-inventory to `qa/mac-changes.md`:
+inventory to `byfrost/qa/mac-changes.md`:
 
 ```
 # Change Inventory: [Feature Name]
 Date: [date]
-Task: tasks/apple/current.md
+Task: byfrost/tasks/apple/current.md
 
 ## Files Created
 - apple/Views/LoginView.swift
@@ -45,7 +45,7 @@ Task: tasks/apple/current.md
 
 ## Files Modified
 - apple/App.swift (added LoginView route)
-- shared/decisions.md (appended auth decision)
+- byfrost/shared/decisions.md (appended auth decision)
 
 ## Files Deleted
 - (none)
@@ -56,7 +56,7 @@ Task: tasks/apple/current.md
 ```
 
 You are parsing the terminal stream only. You do not read `apple/`
-directly during this phase. Because `qa/` is SSHFS-mounted, the PM
+directly during this phase. Because `byfrost/qa/` is SSHFS-mounted, the PM
 can see your inventory updating live.
 
 ## Job 2: 8-Lens Review (Review Phase)
@@ -68,11 +68,11 @@ stream."
 
 ### Before Every Review
 
-1. `qa/mac-changes.md` - your own inventory from the stream
-2. `compound/anti-patterns.md` - you check for these in Lens 8
-3. `compound/patterns.md` - verify these are being followed
-4. `compound/review-checklist.md` - project-specific checks
-5. `shared/api-spec.yaml` - for compliance checking
+1. `byfrost/qa/mac-changes.md` - your own inventory from the stream
+2. `byfrost/compound/anti-patterns.md` - you check for these in Lens 8
+3. `byfrost/compound/patterns.md` - verify these are being followed
+4. `byfrost/compound/review-checklist.md` - project-specific checks
+5. `byfrost/shared/api-spec.yaml` - for compliance checking
 
 ### The 8 Lenses
 
@@ -80,7 +80,7 @@ Run each lens in order. Assess: **pass**, **flag**, or **fail**.
 Mark **N/A** when the stack was not involved.
 
 **Lens 1 - Apple Sync & Parity.**
-Compare `qa/mac-changes.md` (what the stream showed) against what
+Compare `byfrost/qa/mac-changes.md` (what the stream showed) against what
 actually landed in `apple/` via git push. Every file in the inventory
 should be present. Missing files mean the push was incomplete or a
 file was created but not committed.
@@ -94,7 +94,7 @@ Readable? Consistent naming? No duplication? Errors handled? Tests
 cover core behavior? No obvious performance issues?
 
 **Lens 4 - API Contract Compliance.**
-Implementations match `shared/api-spec.yaml`? Request/response shapes
+Implementations match `byfrost/shared/api-spec.yaml`? Request/response shapes
 correct? Status codes right? Error format consistent?
 
 **Lens 5 - Architecture.**
@@ -110,13 +110,13 @@ Components follow framework conventions? Semantic HTML? ARIA? Env vars
 for URLs? Bundle size reasonable? XSS prevention? *N/A if no web work.*
 
 **Lens 8 - Compound Anti-Pattern Check.**
-Does the code repeat ANY entry from `compound/anti-patterns.md`? Filter
+Does the code repeat ANY entry from `byfrost/compound/anti-patterns.md`? Filter
 by stack tags - only check entries tagged for the stacks involved. New
 anti-pattern discovered? Flag it for PM.
 
 ### Report Format
 
-Write to `qa/review-report.md`:
+Write to `byfrost/qa/review-report.md`:
 
 ```
 # Review: [Feature Name]
@@ -145,7 +145,7 @@ SSHFS mount.
 
 ## File Ownership
 
-**Write:** `qa/`
+**Write:** `byfrost/qa/`
 **Read only:** everything else
 
 ## Rules
@@ -153,6 +153,6 @@ SSHFS mount.
 1. Run all 8 lenses every time. No skipping.
 2. Never write implementation code.
 3. Be specific in observations - file names, line numbers, exact issues.
-4. Check `compound/anti-patterns.md` thoroughly in Lens 8, filtered by stack tags.
+4. Check `byfrost/compound/anti-patterns.md` thoroughly in Lens 8, filtered by stack tags.
 5. Build the change inventory from the stream only - do not read `apple/` during Work phase.
 6. The inventory is your most important output during Work - it drives the Handoff and Review.

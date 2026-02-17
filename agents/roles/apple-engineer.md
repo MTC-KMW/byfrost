@@ -8,7 +8,7 @@ watchOS, visionOS, and tvOS.
 
 ## How You Receive Work
 
-The PM writes your task spec to `tasks/apple/current.md`. You see it
+The PM writes your task spec to `byfrost/tasks/apple/current.md`. You see it
 instantly through the SSHFS mount - no git pull needed. The PM then
 sends an execution trigger over the bridge with `byfrost send`. The
 bridge daemon spawns your Claude Code session in tmux.
@@ -25,20 +25,20 @@ by comparing against QA's inventory.
 These directories are mounted from the controller machine. Changes on
 either side are visible instantly.
 
-- `tasks/apple/current.md` - your current task spec (PM writes, you read)
-- `shared/api-spec.yaml` - the API contract your app consumes
-- `shared/decisions.md` - cross-agent decision log (you can append)
-- `compound/patterns.md` - proven patterns (read before every task)
-- `compound/anti-patterns.md` - known mistakes (read before every task)
-- `compound/learnings.md` - accumulated observations (read-only context)
-- `qa/` - QA's working files (read-only, review reports appear here)
+- `byfrost/tasks/apple/current.md` - your current task spec (PM writes, you read)
+- `byfrost/shared/api-spec.yaml` - the API contract your app consumes
+- `byfrost/shared/decisions.md` - cross-agent decision log (you can append)
+- `byfrost/compound/patterns.md` - proven patterns (read before every task)
+- `byfrost/compound/anti-patterns.md` - known mistakes (read before every task)
+- `byfrost/compound/learnings.md` - accumulated observations (read-only context)
+- `byfrost/qa/` - QA's working files (read-only, review reports appear here)
 
 ## Before Every Task
 
-1. `compound/patterns.md` - entries tagged (SwiftUI) and (All)
-2. `compound/anti-patterns.md` - entries tagged (SwiftUI) and (All)
-3. `tasks/apple/current.md` - your task spec from the PM
-4. `shared/api-spec.yaml` - the API contract for endpoints you integrate with
+1. `byfrost/compound/patterns.md` - entries tagged (SwiftUI) and (All)
+2. `byfrost/compound/anti-patterns.md` - entries tagged (SwiftUI) and (All)
+3. `byfrost/tasks/apple/current.md` - your task spec from the PM
+4. `byfrost/shared/api-spec.yaml` - the API contract for endpoints you integrate with
 
 ## Workflow
 
@@ -49,7 +49,7 @@ either side are visible instantly.
 5. Build and verify in Xcode - resolve all warnings and errors
 6. Run existing tests, add new tests for changes
 7. Commit with conventional prefix (`feat:`, `fix:`, `refactor:`)
-8. Note decisions or discoveries in `shared/decisions.md` (append only)
+8. Note decisions or discoveries in `byfrost/shared/decisions.md` (append only)
 9. Push when done - the PM is waiting for `task.complete`
 
 ## Project
@@ -62,7 +62,7 @@ either side are visible instantly.
 
 ## File Ownership
 
-**Write:** `[APPLE_DIR]/`, `shared/decisions.md` (append only)
+**Write:** `[APPLE_DIR]/`, `byfrost/shared/decisions.md` (append only)
 **Read only:** everything else (including all SSHFS-mounted directories except decisions.md)
 
 ## Rules
@@ -71,7 +71,7 @@ either side are visible instantly.
 2. Follow patterns referenced by number in the task spec
 3. Avoid anti-patterns referenced by number in the task spec
 4. Always build and verify before committing
-5. Implement to the API contract - if wrong, note in `shared/decisions.md`, implement anyway
+5. Implement to the API contract - if wrong, note in `byfrost/shared/decisions.md`, implement anyway
 6. Use Keychain for sensitive data
 7. Enforce HTTPS for all network calls
 8. Handle errors gracefully - network failures, invalid data, edge cases

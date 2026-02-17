@@ -101,6 +101,147 @@ def load_config():
     return config
 
 
+# Project indicators that mark a directory as a project root
+_PROJECT_INDICATORS = (
+    "*.xcodeproj", "*.xcworkspace", "Package.swift",
+    "package.json", "requirements.txt", "pyproject.toml",
+    "go.mod", "Cargo.toml", "Gemfile", "build.gradle",
+    "pom.xml", "CMakeLists.txt", "Makefile",
+)
+
+# Directories to always skip during discovery
+_SKIP_DIRS = {
+    "node_modules", "venv", ".venv", "__pycache__", "build", "dist",
+    ".git", ".hg", ".svn", "DerivedData", "Pods", ".build",
+    "target", "vendor", "env",
+}
+
+# macOS protected dirs - searching these may trigger permission prompts.
+# Search them only as a last resort.
+_MACOS_PROTECTED = {
+    "Photos", "Movies", "Music", "Documents", "Downloads",
+    "Desktop", "Pictures", "Library", "Public",
+}
+
+
+def _has_project_indicators(directory: Path) -> bool:
+    """Check if a directory contains any project indicator files."""
+    for pattern in _PROJECT_INDICATORS:
+        if list(directory.glob(pattern)):
+            return True
+    return False
+
+
+def discover_project_path(log) -> Optional[str]:
+    """Auto-discover a project directory by scanning common locations.
+
+    Search order:
+    1. Current working directory
+    2. Home directory children (non-protected), up to 3 levels deep
+    3. Home directory protected dirs (last resort), up to 3 levels deep
+
+    Returns the project path string, or None if nothing found.
+    """
+    cwd = Path.cwd()
+
+    # 1. Check cwd
+    if _has_project_indicators(cwd):
+        log.info(f"Auto-discover: found project at cwd ({cwd})")
+        return str(cwd)
+
+    # 2. Scan from home directory
+    home = Path.home()
+    if not home.exists():
+        return None
+
+    # Split children into normal and protected
+    normal_dirs: list[Path] = []
+    protected_dirs: list[Path] = []
+    try:
+        for child in sorted(home.iterdir()):
+            if not child.is_dir():
+                continue
+            if child.name.startswith("."):
+                continue
+            if child.name in _SKIP_DIRS:
+                continue
+            if child.name in _MACOS_PROTECTED:
+                protected_dirs.append(child)
+            else:
+                normal_dirs.append(child)
+    except PermissionError:
+        log.warning("Auto-discover: cannot read home directory")
+        return None
+
+    # Search normal dirs first (up to 3 levels), then protected
+    for search_group in [normal_dirs, protected_dirs]:
+        for top in search_group:
+            # Level 1: direct child of home
+            if _has_project_indicators(top):
+                log.info(f"Auto-discover: found project at {top}")
+                return str(top)
+            # Level 2-3: subdirectories
+            try:
+                for sub in sorted(top.iterdir()):
+                    if not sub.is_dir() or sub.name.startswith(".") or sub.name in _SKIP_DIRS:
+                        continue
+                    if _has_project_indicators(sub):
+                        log.info(f"Auto-discover: found project at {sub}")
+                        return str(sub)
+                    # Level 3
+                    try:
+                        for subsub in sorted(sub.iterdir()):
+                            if (not subsub.is_dir()
+                                    or subsub.name.startswith(".")
+                                    or subsub.name in _SKIP_DIRS):
+                                continue
+                            if _has_project_indicators(subsub):
+                                log.info(f"Auto-discover: found project at {subsub}")
+                                return str(subsub)
+                    except PermissionError:
+                        continue
+            except PermissionError:
+                continue
+
+    log.warning("Auto-discover: no project found")
+    return None
+
+
+def validate_project_path(config: dict, log) -> None:
+    """Validate the project path in config. Falls back to auto-discovery.
+
+    Updates config["project_path"] in place if auto-discovery finds something.
+    """
+    path_str = config.get("project_path", "")
+
+    if path_str:
+        project = Path(path_str)
+        if project.is_dir():
+            log.info(f"Project path: {path_str} (valid)")
+            return
+        if project.exists():
+            log.warning(f"Project path exists but is not a directory: {path_str}")
+        else:
+            log.warning(
+                f"Project path does not exist: {path_str} "
+                "(must be an absolute path, e.g. /Users/you/MyProject)"
+            )
+        # Fall through to auto-discovery
+        log.info("Attempting auto-discovery as fallback...")
+    else:
+        log.info("No MAC_PROJECT_PATH set, attempting auto-discovery...")
+
+    discovered = discover_project_path(log)
+    if discovered:
+        config["project_path"] = discovered
+        log.info(f"Using discovered project: {discovered}")
+    else:
+        log.warning(
+            "No project found. Set MAC_PROJECT_PATH to the absolute path "
+            "of your project directory."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -721,61 +862,98 @@ class ByfrostDaemon:
         })
 
     async def _handle_project_info(self, ws, msg, source="unknown"):
-        """Return project details from the worker's project directory."""
+        """Return project details from the worker's project directory.
+
+        Includes a diagnostic status field:
+        - "ok": path valid, detection ran
+        - "no_project_path": not set, auto-discovery found nothing
+        - "path_not_found": set but doesn't exist
+        - "path_not_directory": exists but not a directory
+        """
         project = self.config["project_path"]
         info: dict = {"project_path": project}
 
-        if project:
-            project_dir = Path(project)
-            # Detect Xcode project
-            xcodeprojs = list(project_dir.glob("*.xcodeproj"))
+        # Diagnostic checks
+        if not project:
+            info["_status"] = "no_project_path"
+            info["_message"] = (
+                "No project path configured. Set MAC_PROJECT_PATH to the "
+                "absolute path of your project (e.g. /Users/you/MyProject)."
+            )
+            await self._send(ws, "project.info", info)
+            return
+
+        project_dir = Path(project)
+        if not project_dir.exists():
+            info["_status"] = "path_not_found"
+            info["_message"] = (
+                f"Path does not exist: {project}. "
+                "MAC_PROJECT_PATH must be an absolute path "
+                "(e.g. /Users/you/MyProject, not /MyProject)."
+            )
+            await self._send(ws, "project.info", info)
+            return
+
+        if not project_dir.is_dir():
+            info["_status"] = "path_not_directory"
+            info["_message"] = (
+                f"Path exists but is not a directory: {project}. "
+                "MAC_PROJECT_PATH should point to the project root."
+            )
+            await self._send(ws, "project.info", info)
+            return
+
+        info["_status"] = "ok"
+
+        # Detect Xcode project
+        xcodeprojs = list(project_dir.glob("*.xcodeproj"))
+        if xcodeprojs:
+            info["xcode_scheme"] = xcodeprojs[0].stem
+            info["apple_dir"] = "."
+        else:
+            # Check subdirectories one level deep
+            xcodeprojs = list(project_dir.glob("*/*.xcodeproj"))
             if xcodeprojs:
                 info["xcode_scheme"] = xcodeprojs[0].stem
-                info["apple_dir"] = "."
-            else:
-                # Check subdirectories one level deep
-                xcodeprojs = list(project_dir.glob("*/*.xcodeproj"))
-                if xcodeprojs:
-                    info["xcode_scheme"] = xcodeprojs[0].stem
-                    rel = xcodeprojs[0].parent.relative_to(project_dir)
-                    info["apple_dir"] = str(rel)
+                rel = xcodeprojs[0].parent.relative_to(project_dir)
+                info["apple_dir"] = str(rel)
 
-            # Scan Swift files for frameworks
-            swift_files = list(project_dir.rglob("*.swift"))[:30]
-            frameworks: set[str] = set()
-            known = {
-                "SwiftUI", "UIKit", "AppKit", "SwiftData", "CoreData",
-                "Combine", "MapKit", "CloudKit", "StoreKit", "WidgetKit",
-            }
-            for sf in swift_files:
-                try:
-                    for line in sf.read_text().splitlines()[:30]:
-                        line = line.strip()
-                        if line.startswith("import "):
-                            fw = line.split()[1] if len(line.split()) > 1 else ""
-                            if fw in known:
-                                frameworks.add(fw)
-                except OSError:
-                    continue
-            if frameworks:
-                info["apple_frameworks"] = ", ".join(sorted(frameworks))
+        # Scan Swift files for frameworks
+        swift_files = list(project_dir.rglob("*.swift"))[:30]
+        frameworks: set[str] = set()
+        known = {
+            "SwiftUI", "UIKit", "AppKit", "SwiftData", "CoreData",
+            "Combine", "MapKit", "CloudKit", "StoreKit", "WidgetKit",
+        }
+        for sf in swift_files:
+            try:
+                for line in sf.read_text().splitlines()[:30]:
+                    line = line.strip()
+                    if line.startswith("import "):
+                        fw = line.split()[1] if len(line.split()) > 1 else ""
+                        if fw in known:
+                            frameworks.add(fw)
+            except OSError:
+                continue
+        if frameworks:
+            info["apple_frameworks"] = ", ".join(sorted(frameworks))
 
-            # Detect deployment target from Package.swift
-            pkg_swift = project_dir / "Package.swift"
-            if pkg_swift.exists():
-                try:
-                    import re as _re
-                    content = pkg_swift.read_text()
-                    pat = r"\.(iOS|macOS)\(.v(\d+(?:_\d+)?)\)"
-                    targets = []
-                    for m in _re.finditer(pat, content):
-                        plat = m.group(1)
-                        ver = m.group(2).replace("_", ".")
-                        targets.append(f"{plat} {ver}")
-                    if targets:
-                        info["min_deploy_target"] = " / ".join(targets)
-                except OSError:
-                    pass
+        # Detect deployment target from Package.swift
+        pkg_swift = project_dir / "Package.swift"
+        if pkg_swift.exists():
+            try:
+                import re as _re
+                content = pkg_swift.read_text()
+                pat = r"\.(iOS|macOS)\(.v(\d+(?:_\d+)?)\)"
+                targets = []
+                for m in _re.finditer(pat, content):
+                    plat = m.group(1)
+                    ver = m.group(2).replace("_", ".")
+                    targets.append(f"{plat} {ver}")
+                if targets:
+                    info["min_deploy_target"] = " / ".join(targets)
+            except OSError:
+                pass
 
         await self._send(ws, "project.info", info)
 
@@ -1056,6 +1234,9 @@ def main():
         config["port"] = args.port
 
     log = setup_logging(verbose=args.verbose)
+
+    # Validate and auto-discover project path
+    validate_project_path(config, log)
 
     # Handle signals for graceful shutdown
     def shutdown(sig, frame):

@@ -29,9 +29,9 @@ agent the user interacts with directly.
 
 - **You to user**: status updates, clarifying questions, cycle summaries
 - **You to Backend, Web, QA**: Claude Agent Teams messaging (local)
-- **You to Apple Engineer**: task spec via `tasks/apple/current.md` (SSHFS) + bridge trigger (`byfrost send`)
+- **You to Apple Engineer**: task spec via `byfrost/tasks/apple/current.md` (SSHFS) + bridge trigger (`byfrost send`)
 - **Apple Engineer to you**: streamed terminal output + `task.complete` over bridge WebSocket
-- **QA to you**: Agent Teams messaging + `qa/mac-changes.md` and `qa/review-report.md` (visible via SSHFS)
+- **QA to you**: Agent Teams messaging + `byfrost/qa/mac-changes.md` and `byfrost/qa/review-report.md` (visible via SSHFS)
 
 You never talk to the Apple Engineer through Agent Teams. All
 communication goes through the bridge and SSHFS-mounted files.
@@ -41,11 +41,11 @@ communication goes through the bridge and SSHFS-mounted files.
 
 Read before planning any work:
 
-1. `compound/patterns.md` - proven patterns (numbered, reference by ID)
-2. `compound/anti-patterns.md` - known mistakes (numbered, reference by ID)
-3. `compound/learnings.md` - accumulated observations (your staging area)
-4. `shared/api-spec.yaml` - current API contract
-5. `shared/decisions.md` - recent decisions from any agent
+1. `byfrost/compound/patterns.md` - proven patterns (numbered, reference by ID)
+2. `byfrost/compound/anti-patterns.md` - known mistakes (numbered, reference by ID)
+3. `byfrost/compound/learnings.md` - accumulated observations (your staging area)
+4. `byfrost/shared/api-spec.yaml` - current API contract
+5. `byfrost/shared/decisions.md` - recent decisions from any agent
 
 ## The Compound Engineering Cycle
 
@@ -76,12 +76,12 @@ any phase. You may run multiple features through the cycle concurrently.
 5. Implement frontend work directly
 [/IFNOT:FRONTEND]
 <!-- /byfrost:routing -->
-6. Write Apple Engineer's task to `tasks/apple/current.md`
+6. Write Apple Engineer's task to `byfrost/tasks/apple/current.md`
 7. Message QA: "Apple Engineer task dispatched, monitor the stream and build a change inventory."
 8. Send execution trigger over bridge:
 
 ```bash
-byfrost send "Read compound knowledge. Read tasks/apple/current.md. Implement the task. Commit and push when done."
+byfrost send "Read compound knowledge. Read byfrost/tasks/apple/current.md. Implement the task. Commit and push when done."
 ```
 
 ### Phase 2 - Work
@@ -103,7 +103,7 @@ Agent Teams. They message you or each other as needed.
 
 **QA** - watches Apple Engineer's stream via `byfrost attach`. Parses
 file creates, edits, and deletes from the terminal output. Writes a
-structured change inventory to `qa/mac-changes.md` in real time. You
+structured change inventory to `byfrost/qa/mac-changes.md` in real time. You
 can see this updating live through the SSHFS mount.
 
 ### Handoff
@@ -111,7 +111,7 @@ can see this updating live through the SSHFS mount.
 When Apple Engineer's task completes:
 
 1. You receive `task.complete` from the bridge
-2. Read `qa/mac-changes.md` to see what files were created, edited, deleted
+2. Read `byfrost/qa/mac-changes.md` to see what files were created, edited, deleted
 3. Check whether `apple/` on the controller reflects those changes (git push)
 4. If files have landed, proceed to Review
 5. If not, wait for the push to complete - the QA inventory tells you
@@ -126,19 +126,19 @@ full 8-lens review. You already have the change inventory from the
 stream."
 
 QA already knows which files to focus on. Wait for
-`qa/review-report.md` before proceeding. If QA flags issues, route
+`byfrost/qa/review-report.md` before proceeding. If QA flags issues, route
 fixes back to the appropriate agent.
 
 ### Phase 4 - Compound
 
-1. Read `qa/review-report.md`
-2. Extract observations into `compound/learnings.md` as dated raw notes
+1. Read `byfrost/qa/review-report.md`
+2. Extract observations into `byfrost/compound/learnings.md` as dated raw notes
 3. If a learning recurs across cycles or proves significant, promote it:
-   - Reusable pattern -> numbered entry in `compound/patterns.md`
-   - Mistake to avoid -> numbered entry in `compound/anti-patterns.md`
+   - Reusable pattern -> numbered entry in `byfrost/compound/patterns.md`
+   - Mistake to avoid -> numbered entry in `byfrost/compound/anti-patterns.md`
    - Add stack tags: (SwiftUI), (Back End), (Front End), (All)
    - Mark the learning as promoted with a reference to the new ID
-4. Update `shared/api-spec.yaml` if the API contract changed
+4. Update `byfrost/shared/api-spec.yaml` if the API contract changed
 5. Report to the user:
    - What was built
    - Issues QA found and how they were resolved
@@ -152,14 +152,14 @@ increment. Anti-patterns: A-001, A-002, A-003... Same rule.
 
 ## File Ownership
 
-**Write:** `shared/`, `tasks/`, `pm/`, `compound/`
-**Read only:** agent-owned directories (`apple/`, `backend/`, `web/`), `qa/`
+**Write:** `byfrost/shared/`, `byfrost/tasks/`, `byfrost/pm/`, `byfrost/compound/`
+**Read only:** agent-owned directories (`apple/`, `backend/`, `web/`), `byfrost/qa/`
 
 ## Rules
 
 1. Never write implementation code when a dedicated agent exists for that stack
 2. When no dedicated agent exists, implement that stack's work directly
-3. API changes go through `shared/api-spec.yaml` BEFORE implementation
+3. API changes go through `byfrost/shared/api-spec.yaml` BEFORE implementation
 4. Conventional commits: `feat:`, `fix:`, `docs:`, `contract:`, `qa:`, `compound:`
 5. Every cycle completes all four phases - Plan, Work, Review, Compound
 6. Apple Engineer communicates only through SSHFS files and the bridge

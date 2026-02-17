@@ -10,10 +10,10 @@ Usage: byfrost team status|add|remove [backend|frontend]
 from pathlib import Path
 
 from agents.init import (
+    BYFROST_SUBDIR,
     ROLES_DIR,
     AgentConfig,
     TeamConfig,
-    _merge_into_existing_claude_md,
     _print_error,
     _print_status,
     _prompt,
@@ -169,30 +169,29 @@ def team_add(project_dir: Path, agent: str) -> int:
     config.agents.append(agent_config)
     config.team_size += 1
 
-    # Create task directory + stub
+    # Create task directory + stub under byfrost/
+    bf_dir = project_dir / BYFROST_SUBDIR
     task_dir = "tasks/backend" if agent == "backend" else "tasks/web"
-    (project_dir / task_dir).mkdir(parents=True, exist_ok=True)
-    stub_path = project_dir / task_dir / "current.md"
+    (bf_dir / task_dir).mkdir(parents=True, exist_ok=True)
+    stub_path = bf_dir / task_dir / "current.md"
     if not stub_path.exists():
         stub_path.write_text(
             "# Current Task\n\n_No task assigned. PM will write the next task here._\n"
         )
-    _print_status(f"  Created: {task_dir}/current.md")
+    _print_status(f"  Created: {BYFROST_SUBDIR}/{task_dir}/current.md")
 
-    # Generate agent CLAUDE.md
+    # Generate agent CLAUDE.md under byfrost/
     template_name = "backend-engineer.md" if agent == "backend" else "frontend-engineer.md"
     template_path = ROLES_DIR / template_name
     if template_path.exists():
         values = config.get_placeholder_values()
         active_tags = config.get_active_agent_tags()
         content = process_template(template_path.read_text(), values, active_tags)
-        agent_dir = agent_config.directory or agent_config.settings.get(
-            "BACKEND_DIR" if agent == "backend" else "FRONTEND_DIR", agent,
-        )
-        out_path = project_dir / agent_dir / "CLAUDE.md"
+        role_dir = "backend" if agent == "backend" else "frontend"
+        out_path = bf_dir / role_dir / "CLAUDE.md"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(content)
-        _print_status(f"  Created: {agent_dir}/CLAUDE.md")
+        _print_status(f"  Created: {BYFROST_SUBDIR}/{role_dir}/CLAUDE.md")
 
     # Partial-regen PM and root
     _partial_regen_pm(project_dir, config)
@@ -236,14 +235,13 @@ def team_remove(project_dir: Path, agent: str) -> int:
         _print_error(f"{name} is not in the team.")
         return 1
 
-    # Delete agent CLAUDE.md
-    agent_dir = agent_config.directory or agent_config.settings.get(
-        "BACKEND_DIR" if agent == "backend" else "FRONTEND_DIR", agent,
-    )
-    claude_path = project_dir / agent_dir / "CLAUDE.md"
+    # Delete agent CLAUDE.md from byfrost/
+    bf_dir = project_dir / BYFROST_SUBDIR
+    role_dir = "backend" if agent == "backend" else "frontend"
+    claude_path = bf_dir / role_dir / "CLAUDE.md"
     if claude_path.exists():
         claude_path.unlink()
-        _print_status(f"  Removed: {agent_dir}/CLAUDE.md")
+        _print_status(f"  Removed: {BYFROST_SUBDIR}/{role_dir}/CLAUDE.md")
 
     # Remove from config
     config.agents = [a for a in config.agents if a.role != agent]
@@ -270,7 +268,8 @@ def team_remove(project_dir: Path, agent: str) -> int:
 def _partial_regen_pm(project_dir: Path, config: TeamConfig) -> None:
     """Regenerate managed sections of PM's CLAUDE.md between markers."""
     pm_template_path = ROLES_DIR / "pm.md"
-    pm_claude_path = project_dir / "pm" / "CLAUDE.md"
+    bf_dir = project_dir / BYFROST_SUBDIR
+    pm_claude_path = bf_dir / "pm" / "CLAUDE.md"
 
     if not pm_template_path.exists() or not pm_claude_path.exists():
         return
@@ -282,20 +281,21 @@ def _partial_regen_pm(project_dir: Path, config: TeamConfig) -> None:
     existing = pm_claude_path.read_text()
     updated = replace_marker_sections(existing, processed, PM_MARKERS)
     pm_claude_path.write_text(updated)
-    _print_status("  Updated: pm/CLAUDE.md (managed sections)")
+    _print_status(f"  Updated: {BYFROST_SUBDIR}/pm/CLAUDE.md (managed sections)")
 
 
 def _partial_regen_root(project_dir: Path, config: TeamConfig) -> None:
-    """Regenerate managed sections of root CLAUDE.md between markers."""
-    root_path = project_dir / "CLAUDE.md"
+    """Regenerate managed sections of byfrost/CLAUDE.md between markers."""
+    bf_dir = project_dir / BYFROST_SUBDIR
+    root_path = bf_dir / "CLAUDE.md"
     if not root_path.exists():
         return
 
     new_content = generate_root_claude_md(config)
     existing = root_path.read_text()
-    updated = _merge_into_existing_claude_md(existing, new_content)
+    updated = replace_marker_sections(existing, new_content, ROOT_MARKERS)
     root_path.write_text(updated)
-    _print_status("  Updated: CLAUDE.md (managed sections)")
+    _print_status(f"  Updated: {BYFROST_SUBDIR}/CLAUDE.md (managed sections)")
 
 
 # ---------------------------------------------------------------------------

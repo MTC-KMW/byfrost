@@ -21,6 +21,7 @@ from typing import Any
 # Constants
 # ---------------------------------------------------------------------------
 
+BYFROST_SUBDIR = "byfrost"
 TEAM_CONFIG_FILE = ".byfrost-team.json"
 
 ROLES_DIR = Path(__file__).parent / "roles"
@@ -86,14 +87,16 @@ class TeamConfig:
     created_at: str = ""
 
     def save(self, project_dir: Path) -> None:
-        """Write config to .byfrost-team.json in project root."""
-        path = project_dir / TEAM_CONFIG_FILE
+        """Write config to byfrost/.byfrost-team.json."""
+        bf_dir = project_dir / BYFROST_SUBDIR
+        bf_dir.mkdir(parents=True, exist_ok=True)
+        path = bf_dir / TEAM_CONFIG_FILE
         path.write_text(json.dumps(asdict(self), indent=2) + "\n")
 
     @classmethod
     def load(cls, project_dir: Path) -> "TeamConfig | None":
-        """Load config from .byfrost-team.json. Returns None if missing."""
-        path = project_dir / TEAM_CONFIG_FILE
+        """Load config from byfrost/.byfrost-team.json."""
+        path = project_dir / BYFROST_SUBDIR / TEAM_CONFIG_FILE
         if not path.exists():
             return None
         try:
@@ -193,18 +196,30 @@ def process_template(
 
 
 def detect_project_stacks(project_dir: Path) -> dict[str, list[str]]:
-    """Scan project directory for stack indicators."""
+    """Scan project directory for stack indicators.
+
+    Checks root and common subdirs (web/, frontend/, client/) for frontend.
+    """
     found: dict[str, list[str]] = {}
     for stack, indicators in PROJECT_INDICATORS.items():
         matches = []
-        for indicator in indicators:
-            # Use glob for patterns with wildcards, direct check otherwise
-            if "*" in indicator:
-                results = list(project_dir.glob(indicator))
-                if results:
-                    matches.append(results[0].name)
-            elif (project_dir / indicator).exists():
-                matches.append(indicator)
+        # Directories to search: root + common frontend subdirs
+        search_dirs = [project_dir]
+        if stack == "frontend":
+            for sub in ("web", "frontend", "client"):
+                sub_dir = project_dir / sub
+                if sub_dir.is_dir():
+                    search_dirs.append(sub_dir)
+        for search_dir in search_dirs:
+            for indicator in indicators:
+                if "*" in indicator:
+                    results = list(search_dir.glob(indicator))
+                    if results:
+                        matches.append(results[0].name)
+                elif (search_dir / indicator).exists():
+                    matches.append(indicator)
+            if matches:
+                break
         if matches:
             found[stack] = matches
     return found
@@ -642,23 +657,25 @@ def _prompt_choice(question: str, choices: list[str], default: int = 0) -> int:
 
 
 def create_coordination_dirs(project_dir: Path, config: TeamConfig) -> list[str]:
-    """Create coordination directories. Returns list of created dir paths."""
+    """Create coordination directories under byfrost/. Returns created paths."""
     dirs = ["shared", "compound", "tasks/apple", "pm", "qa"]
     if config.has_agent("backend"):
         dirs.append("tasks/backend")
     if config.has_agent("frontend"):
         dirs.append("tasks/web")
 
+    bf_dir = project_dir / BYFROST_SUBDIR
     created = []
     for d in dirs:
-        path = project_dir / d
+        path = bf_dir / d
         path.mkdir(parents=True, exist_ok=True)
-        created.append(d)
+        created.append(f"{BYFROST_SUBDIR}/{d}")
     return created
 
 
 def write_template_files(project_dir: Path, values: dict[str, str]) -> list[str]:
-    """Copy and process template files to project. Returns list of created paths."""
+    """Copy and process template files to byfrost/. Returns created paths."""
+    bf_dir = project_dir / BYFROST_SUBDIR
     created = []
     for template_name, output_path in TEMPLATE_FILE_MAP.items():
         template_path = TEMPLATES_DIR / template_name
@@ -668,10 +685,10 @@ def write_template_files(project_dir: Path, values: dict[str, str]) -> list[str]
         content = template_path.read_text()
         content = substitute_placeholders(content, values)
 
-        out = project_dir / output_path
+        out = bf_dir / output_path
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(content)
-        created.append(output_path)
+        created.append(f"{BYFROST_SUBDIR}/{output_path}")
     return created
 
 
@@ -681,68 +698,38 @@ def write_role_claude_mds(
     values: dict[str, str],
     active_tags: set[str],
 ) -> list[str]:
-    """Generate and write role-specific CLAUDE.md files. Returns created paths."""
+    """Generate and write role-specific CLAUDE.md files under byfrost/."""
+    bf_dir = project_dir / BYFROST_SUBDIR
     created = []
 
-    # PM -> pm/CLAUDE.md
-    pm_template = ROLES_DIR / "pm.md"
-    if pm_template.exists():
-        content = process_template(pm_template.read_text(), values, active_tags)
-        out_path = "pm/CLAUDE.md"
-        (project_dir / "pm").mkdir(parents=True, exist_ok=True)
-        (project_dir / out_path).write_text(content)
-        created.append(out_path)
+    # Role -> fixed subdir name (never user's code dir)
+    role_map = [
+        ("pm", "pm.md", "pm"),
+        ("apple", "apple-engineer.md", "apple"),
+        ("qa", "qa-engineer.md", "qa"),
+        ("backend", "backend-engineer.md", "backend"),
+        ("frontend", "frontend-engineer.md", "frontend"),
+    ]
 
-    # Apple Engineer -> {apple_dir}/CLAUDE.md
-    apple = config.get_agent("apple")
-    if apple and apple.enabled:
-        template = ROLES_DIR / "apple-engineer.md"
-        if template.exists():
-            content = process_template(template.read_text(), values, active_tags)
-            apple_dir = apple.settings.get("APPLE_DIR", "apple")
-            out_path = f"{apple_dir}/CLAUDE.md"
-            (project_dir / apple_dir).mkdir(parents=True, exist_ok=True)
-            (project_dir / out_path).write_text(content)
-            created.append(out_path)
-
-    # QA -> qa/CLAUDE.md
-    qa_template = ROLES_DIR / "qa-engineer.md"
-    if qa_template.exists():
-        content = process_template(qa_template.read_text(), values, active_tags)
-        out_path = "qa/CLAUDE.md"
-        (project_dir / "qa").mkdir(parents=True, exist_ok=True)
-        (project_dir / out_path).write_text(content)
-        created.append(out_path)
-
-    # Backend -> {backend_dir}/CLAUDE.md
-    backend = config.get_agent("backend")
-    if backend and backend.enabled:
-        template = ROLES_DIR / "backend-engineer.md"
-        if template.exists():
-            content = process_template(template.read_text(), values, active_tags)
-            backend_dir = backend.settings.get("BACKEND_DIR", "backend")
-            out_path = f"{backend_dir}/CLAUDE.md"
-            (project_dir / backend_dir).mkdir(parents=True, exist_ok=True)
-            (project_dir / out_path).write_text(content)
-            created.append(out_path)
-
-    # Frontend -> {frontend_dir}/CLAUDE.md
-    frontend = config.get_agent("frontend")
-    if frontend and frontend.enabled:
-        template = ROLES_DIR / "frontend-engineer.md"
-        if template.exists():
-            content = process_template(template.read_text(), values, active_tags)
-            frontend_dir = frontend.settings.get("FRONTEND_DIR", "web")
-            out_path = f"{frontend_dir}/CLAUDE.md"
-            (project_dir / frontend_dir).mkdir(parents=True, exist_ok=True)
-            (project_dir / out_path).write_text(content)
-            created.append(out_path)
+    for role, template_name, subdir in role_map:
+        agent = config.get_agent(role)
+        if not agent or not agent.enabled:
+            continue
+        template = ROLES_DIR / template_name
+        if not template.exists():
+            continue
+        content = process_template(template.read_text(), values, active_tags)
+        out_dir = bf_dir / subdir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "CLAUDE.md").write_text(content)
+        created.append(f"{BYFROST_SUBDIR}/{subdir}/CLAUDE.md")
 
     return created
 
 
 def create_stub_files(project_dir: Path, config: TeamConfig) -> list[str]:
-    """Create initial task spec and coordination stub files."""
+    """Create initial task spec and coordination stub files under byfrost/."""
+    bf_dir = project_dir / BYFROST_SUBDIR
     created = []
     task_stub = "# Current Task\n\n_No task assigned. PM will write the next task here._\n"
 
@@ -753,16 +740,18 @@ def create_stub_files(project_dir: Path, config: TeamConfig) -> list[str]:
         paths.append("tasks/web/current.md")
 
     for p in paths:
-        out = project_dir / p
+        out = bf_dir / p
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(task_stub)
-        created.append(p)
+        created.append(f"{BYFROST_SUBDIR}/{p}")
 
     # PM status
-    (project_dir / "pm/status.md").write_text(
+    pm_status = bf_dir / "pm" / "status.md"
+    pm_status.parent.mkdir(parents=True, exist_ok=True)
+    pm_status.write_text(
         "# PM Status\n\n_Cycle tracking. Updated by PM after each phase._\n"
     )
-    created.append("pm/status.md")
+    created.append(f"{BYFROST_SUBDIR}/pm/status.md")
 
     # QA working files
     qa_files = {
@@ -776,8 +765,10 @@ def create_stub_files(project_dir: Path, config: TeamConfig) -> list[str]:
         ),
     }
     for path, content in qa_files.items():
-        (project_dir / path).write_text(content)
-        created.append(path)
+        out = bf_dir / path
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(content)
+        created.append(f"{BYFROST_SUBDIR}/{path}")
 
     return created
 
@@ -813,14 +804,15 @@ def generate_root_claude_md(config: TeamConfig) -> str:
     lines.append("## Communication\n")
     lines.append("- **User to PM**: Claude Code conversation (direct)")
     lines.append(
-        "- **PM to Apple Engineer**: task spec via `tasks/apple/current.md` (SSHFS) "
-        "+ bridge trigger (`byfrost send`)"
+        "- **PM to Apple Engineer**: task spec via `byfrost/tasks/apple/current.md` "
+        "(SSHFS) + bridge trigger (`byfrost send`)"
     )
     lines.append(
         "- **Apple Engineer to PM**: streamed terminal output + `task.complete` over bridge"
     )
     lines.append(
-        "- **QA**: monitors Apple stream, writes `qa/mac-changes.md` and `qa/review-report.md`"
+        "- **QA**: monitors Apple stream, writes `byfrost/qa/mac-changes.md` "
+        "and `byfrost/qa/review-report.md`"
     )
     if config.has_agent("backend") or config.has_agent("frontend"):
         lines.append(
@@ -840,25 +832,26 @@ def generate_root_claude_md(config: TeamConfig) -> str:
     # Directory structure
     lines.append("## Directory Structure\n")
     lines.append("```")
-    lines.append("shared/              Contracts shared across all stacks")
-    lines.append("  api-spec.yaml      API contract (source of truth)")
-    lines.append("  decisions.md       Cross-agent decision log")
-    lines.append("compound/            Accumulated knowledge")
-    lines.append("  patterns.md        Proven patterns (P-XXX)")
-    lines.append("  anti-patterns.md   Known mistakes (A-XXX)")
-    lines.append("  learnings.md       Raw observations (PM staging)")
-    lines.append("  review-checklist.md Standard review checks")
-    lines.append("tasks/               Task specs per agent")
-    lines.append("  apple/current.md   Apple Engineer's current task")
+    lines.append("byfrost/             Agent team coordination")
+    lines.append("  shared/            Contracts shared across all stacks")
+    lines.append("    api-spec.yaml    API contract (source of truth)")
+    lines.append("    decisions.md     Cross-agent decision log")
+    lines.append("  compound/          Accumulated knowledge")
+    lines.append("    patterns.md      Proven patterns (P-XXX)")
+    lines.append("    anti-patterns.md Known mistakes (A-XXX)")
+    lines.append("    learnings.md     Raw observations (PM staging)")
+    lines.append("    review-checklist.md Standard review checks")
+    lines.append("  tasks/             Task specs per agent")
+    lines.append("    apple/current.md Apple Engineer's current task")
     if config.has_agent("backend"):
-        lines.append("  backend/current.md Back End task")
+        lines.append("    backend/current.md Back End task")
     if config.has_agent("frontend"):
-        lines.append("  web/current.md     Front End task")
-    lines.append("pm/                  PM coordination")
-    lines.append("  status.md          Cycle tracking")
-    lines.append("qa/                  QA working files")
-    lines.append("  mac-changes.md     Change inventory from stream")
-    lines.append("  review-report.md   8-lens review output")
+        lines.append("    web/current.md   Front End task")
+    lines.append("  pm/                PM coordination")
+    lines.append("    status.md        Cycle tracking")
+    lines.append("  qa/                QA working files")
+    lines.append("    mac-changes.md   Change inventory from stream")
+    lines.append("    review-report.md 8-lens review output")
     lines.append("```\n")
 
     return "\n".join(lines) + "\n"
@@ -1018,6 +1011,8 @@ def _fetch_worker_project_info() -> dict[str, str]:
     """Query the worker daemon for Apple project details.
 
     Connects via WebSocket, sends project.info request, returns response.
+    Returns dict with Apple details on success.
+    Returns dict with _status/_message on daemon diagnostic error.
     Returns empty dict if worker is unreachable.
     """
     try:
@@ -1065,6 +1060,13 @@ def _fetch_worker_project_info() -> dict[str, str]:
                     )
                     return {}
                 if data.get("type") == "project.info":
+                    # Pass through diagnostic status
+                    status = data.get("_status", "")
+                    if status and status != "ok":
+                        return {
+                            "_status": status,
+                            "_message": data.get("_message", ""),
+                        }
                     result: dict[str, str] = {}
                     for key in (
                         "xcode_scheme", "apple_dir",
@@ -1076,6 +1078,9 @@ def _fetch_worker_project_info() -> dict[str, str]:
             return {}
 
         return asyncio.run(_query())
+    except ConnectionRefusedError:
+        _print_error("Worker unreachable - is the daemon running?")
+        return {}
     except Exception as exc:
         _print_error(f"Worker query failed: {exc}")
         return {}
@@ -1086,6 +1091,7 @@ def _build_auto_config(
 ) -> tuple[TeamConfig, list[tuple[str, str, str]]]:
     """Auto-detect everything and build a TeamConfig.
 
+    Narrates each detection as it happens so the user sees progress.
     Returns (config, fields) where fields is a list of
     (label, key, value) tuples for display and editing.
     """
@@ -1093,23 +1099,80 @@ def _build_auto_config(
     detected = detect_project_stacks(project_dir)
     team_size, has_backend, has_frontend = detect_team_size(detected)
 
-    # Project info
+    # Project info -- narrated
     project_name = detect_project_name(project_dir)
+    _print_status(f"  Project name: {project_name}")
+
     controller_hostname = platform.node()
+    _print_status(f"  Controller: {controller_hostname}")
+
     connection = _detect_byfrost_connection()
     worker_hostname = connection.get("worker_hostname", "")
+    if worker_hostname:
+        _print_status(f"  Worker: {worker_hostname}")
+    else:
+        _print_status("  Worker: (not detected)")
 
-    # Stack details (local)
+    # Stack details (local) -- narrated
     apple = detect_apple_details(project_dir)
-    backend = detect_backend_details(project_dir) if has_backend else {}
-    frontend = detect_frontend_details(project_dir) if has_frontend else {}
+    if apple.get("XCODE_SCHEME"):
+        _print_status(
+            f"  Apple (local): {apple.get('XCODE_SCHEME')} "
+            f"/ {apple.get('APPLE_FRAMEWORKS', '?')}"
+        )
+
+    backend: dict[str, str] = {}
+    if has_backend:
+        backend = detect_backend_details(project_dir)
+        fw = backend.get("BACKEND_FRAMEWORK", "")
+        lang = backend.get("BACKEND_LANGUAGE", "")
+        db = backend.get("DATABASE_TYPE", "")
+        _print_status(
+            f"  Backend: {' / '.join(filter(None, [fw, lang, db]))}"
+        )
+
+    frontend: dict[str, str] = {}
+    if has_frontend:
+        frontend = detect_frontend_details(project_dir)
+        fw = frontend.get("FRONTEND_FRAMEWORK", "")
+        _print_status(f"  Frontend: {fw or '(unknown framework)'}")
+
+    _print_status(f"  Team size: {team_size}")
 
     # Query worker daemon for Apple project details (remote)
     _print_status("Querying worker for Apple project details...")
     worker_info = _fetch_worker_project_info()
-    if worker_info:
-        _print_status(f"  Worker project: {worker_info.get('xcode_scheme', '?')}")
-        # Worker info overrides local Apple detection
+
+    if worker_info and "_status" in worker_info:
+        # Daemon reachable but misconfigured
+        status = worker_info["_status"]
+        message = worker_info.get("_message", "")
+        _print_error(f"Worker daemon issue: {message}")
+        if status == "no_project_path":
+            _print_error(
+                "Fix: set MAC_PROJECT_PATH before starting the daemon, "
+                "e.g.:"
+            )
+            _print_error(
+                "  MAC_PROJECT_PATH=/Users/you/MyProject "
+                "python3 -m daemon.byfrost_daemon"
+            )
+        elif status == "path_not_found":
+            _print_error(
+                "Fix: MAC_PROJECT_PATH must be an absolute path "
+                "to a directory that exists on the Mac."
+            )
+        elif status == "path_not_directory":
+            _print_error(
+                "Fix: MAC_PROJECT_PATH should point to the project "
+                "root directory, not a file."
+            )
+        _print_status("  Using local defaults for Apple detection")
+    elif worker_info:
+        # Daemon reachable and working -- override local Apple detection
+        _print_status(
+            f"  Worker project: {worker_info.get('xcode_scheme', '?')}"
+        )
         for wk, ak in [
             ("xcode_scheme", "XCODE_SCHEME"),
             ("apple_dir", "APPLE_DIR"),
@@ -1119,7 +1182,12 @@ def _build_auto_config(
             if wk in worker_info:
                 apple[ak] = worker_info[wk]
     else:
+        # Daemon unreachable
         _print_status("  Worker unreachable (using local defaults)")
+        _print_status("  Troubleshooting:")
+        _print_status("    - Is the daemon running on the Mac?")
+        _print_status("    - Can you reach the Mac? (ping <hostname>)")
+        _print_status("    - Run: byfrost daemon status")
 
     # Build agents
     agents: list[AgentConfig] = [AgentConfig(role="pm")]
@@ -1363,15 +1431,35 @@ def _init_default_team(project_dir: Path) -> int:
     for f in stubs:
         _print_status(f"  Created: {f}")
 
-    # Root CLAUDE.md
-    root_content = generate_root_claude_md(config)
+    # Team CLAUDE.md inside byfrost/
+    team_content = generate_root_claude_md(config)
+    bf_dir = project_dir / BYFROST_SUBDIR
+    bf_dir.mkdir(parents=True, exist_ok=True)
+    (bf_dir / "CLAUDE.md").write_text(team_content)
+    _print_status(f"  Created: {BYFROST_SUBDIR}/CLAUDE.md")
+
+    # Root CLAUDE.md -- append small reference (never overwrite)
     root_path = project_dir / "CLAUDE.md"
+    byfrost_ref = (
+        "\n---\n\n"
+        "## Byfrost Agent Team\n\n"
+        f"See `{BYFROST_SUBDIR}/CLAUDE.md` for team configuration "
+        "and coordination.\n"
+        f"Agent role instructions are in "
+        f"`{BYFROST_SUBDIR}/{{role}}/CLAUDE.md`.\n"
+    )
     if root_path.exists():
-        _print_status("Root CLAUDE.md exists - merging team section.")
-        existing_content = root_path.read_text()
-        root_content = _merge_into_existing_claude_md(existing_content, root_content)
-    root_path.write_text(root_content)
-    _print_status("  Created: CLAUDE.md")
+        existing = root_path.read_text()
+        if "## Byfrost Agent Team" not in existing:
+            root_path.write_text(existing.rstrip() + byfrost_ref)
+            _print_status("  Updated: CLAUDE.md (added byfrost reference)")
+        else:
+            _print_status("  CLAUDE.md already has byfrost reference")
+    else:
+        root_path.write_text(
+            f"# {config.project_name}\n" + byfrost_ref
+        )
+        _print_status("  Created: CLAUDE.md")
 
     config.save(project_dir)
     _print_status(f"  Created: {TEAM_CONFIG_FILE}")
