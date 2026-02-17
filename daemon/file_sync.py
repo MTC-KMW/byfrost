@@ -32,6 +32,9 @@ DEBOUNCE_MS = 100
 # Echo suppression TTL in seconds - prevent re-syncing files we just wrote
 SUPPRESS_TTL = 0.5
 
+# Files to ignore during sync (OS metadata, editor temp files)
+_IGNORE_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+
 
 class DaemonFileSync:
     """Watches byfrost/ coordination dirs and syncs over WebSocket."""
@@ -297,6 +300,8 @@ class DaemonFileSync:
         if str(p).startswith(("/", "\\")):
             return False
         if not parts or parts[0] not in SYNC_DIRS:
+            return False
+        if p.name in _IGNORE_FILES:
             return False
         return True
 

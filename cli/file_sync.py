@@ -46,6 +46,9 @@ DEBOUNCE_MS = 100
 # Echo suppression TTL in seconds
 SUPPRESS_TTL = 0.5
 
+# Files to ignore during sync (OS metadata, editor temp files)
+_IGNORE_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+
 # Reconnect delay on connection loss
 RECONNECT_DELAY = 5
 
@@ -406,6 +409,8 @@ class SyncClient:
         if str(p).startswith(("/", "\\")):
             return False
         if not parts or parts[0] not in SYNC_DIRS:
+            return False
+        if p.name in _IGNORE_FILES:
             return False
         return True
 

@@ -92,6 +92,17 @@ class TestPathValidation:
         for d in SYNC_DIRS:
             assert sync._validate_path(f"{d}/file.md") is True
 
+    @pytest.mark.parametrize("rel", [
+        "tasks/.DS_Store",
+        "shared/.DS_Store",
+        "tasks/apple/.DS_Store",
+        "pm/Thumbs.db",
+        "qa/desktop.ini",
+    ])
+    def test_rejects_ignored_files(self, tmp_path: Path, rel: str) -> None:
+        sync = _make_sync(tmp_path)
+        assert sync._validate_path(rel) is False
+
 
 # ---------------------------------------------------------------------------
 # Relative path conversion
