@@ -24,7 +24,7 @@ AUTH_FILE = BRIDGE_DIR / "auth.json"
 # ---------------------------------------------------------------------------
 
 DEFAULT_PORT = 9784
-DEFAULT_SERVER_URL = "https://api.byfrost.dev"
+DEFAULT_SERVER_URL = "https://byfrost-server.fly.dev"
 
 # ---------------------------------------------------------------------------
 # Shared config helpers

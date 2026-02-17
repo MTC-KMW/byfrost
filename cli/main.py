@@ -1043,7 +1043,7 @@ def main():
     p_login = sub.add_parser("login", help="Sign in with GitHub and register device")
     p_login.add_argument(
         "--server", default=None,
-        help="Server URL (default: https://api.byfrost.dev or BYFROST_SERVER env)",
+        help="Server URL (default: https://byfrost-server.fly.dev or BYFROST_SERVER env)",
     )
 
     # byfrost connect
