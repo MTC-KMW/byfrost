@@ -55,6 +55,10 @@ def _print_status(msg: str) -> None:
     print(f"\033[36m[byfrost]\033[0m {msg}")
 
 
+def _print_bold(msg: str) -> None:
+    print(f"\033[36m[byfrost]\033[0m \033[1m{msg}\033[0m")
+
+
 def _print_error(msg: str) -> None:
     print(f"\033[31m[byfrost error]\033[0m {msg}", file=sys.stderr)
 
@@ -1086,80 +1090,79 @@ def _build_auto_config(
     detected = detect_project_stacks(project_dir)
     team_size, has_backend, has_frontend = detect_team_size(detected)
 
-    # Project info -- narrated
+    # Project info
     project_name = detect_project_name(project_dir)
-    _print_status(f"  Project name: {project_name}")
-
     controller_hostname = platform.node()
-    _print_status(f"  Controller: {controller_hostname}")
-
     connection = _detect_byfrost_connection()
     worker_hostname = connection.get("worker_hostname", "")
-    if worker_hostname:
-        _print_status(f"  Worker: {worker_hostname}")
-    else:
-        _print_status("  Worker: (not detected)")
 
-    # Stack details (local) -- narrated
-    apple = detect_apple_details(project_dir)
-    if apple.get("XCODE_SCHEME"):
-        _print_status(
-            f"  Apple (local): {apple.get('XCODE_SCHEME')} "
-            f"/ {apple.get('APPLE_FRAMEWORKS', '?')}"
-        )
+    _print_bold(f"  Project: {project_name}")
+    print()
 
+    # Controller-side detection
+    _print_status(f"  Controller ({controller_hostname}):")
+    controller_parts = []
     backend: dict[str, str] = {}
     if has_backend:
         backend = detect_backend_details(project_dir)
         fw = backend.get("BACKEND_FRAMEWORK", "")
         lang = backend.get("BACKEND_LANGUAGE", "")
         db = backend.get("DATABASE_TYPE", "")
-        _print_status(
-            f"  Backend: {' / '.join(filter(None, [fw, lang, db]))}"
+        controller_parts.append(
+            f"    Backend: {' / '.join(filter(None, [fw, lang, db]))}"
         )
-
     frontend: dict[str, str] = {}
     if has_frontend:
         frontend = detect_frontend_details(project_dir)
         fw = frontend.get("FRONTEND_FRAMEWORK", "")
-        _print_status(f"  Frontend: {fw or '(unknown framework)'}")
+        controller_parts.append(
+            f"    Frontend: {fw or '(unknown framework)'}"
+        )
+    if not controller_parts:
+        controller_parts.append("    (no backend/frontend detected)")
+    for line in controller_parts:
+        _print_status(line)
+    print()
 
-    _print_status(f"  Team size: {team_size}")
+    # Worker-side detection
+    apple = detect_apple_details(project_dir)
+    worker_label = worker_hostname or "(not connected)"
+    _print_status(f"  Worker ({worker_label}):")
 
-    # Query worker daemon for Apple project details (remote)
-    _print_status("Querying worker for Apple project details...")
     worker_info = _fetch_worker_project_info()
 
     if worker_info and "_status" in worker_info:
         # Daemon reachable but misconfigured
         status = worker_info["_status"]
         message = worker_info.get("_message", "")
-        _print_error(f"Worker daemon issue: {message}")
+        _print_error(f"    Daemon issue: {message}")
         if status == "no_project_path":
             _print_error(
-                "Fix: set MAC_PROJECT_PATH before starting the daemon, "
+                "    Fix: set MAC_PROJECT_PATH before starting the daemon, "
                 "e.g.:"
             )
             _print_error(
-                "  MAC_PROJECT_PATH=/Users/you/MyProject "
+                "      MAC_PROJECT_PATH=/Users/you/MyProject "
                 "python3 -m daemon.byfrost_daemon"
             )
         elif status == "path_not_found":
             _print_error(
-                "Fix: MAC_PROJECT_PATH must be an absolute path "
+                "    Fix: MAC_PROJECT_PATH must be an absolute path "
                 "to a directory that exists on the Mac."
             )
         elif status == "path_not_directory":
             _print_error(
-                "Fix: MAC_PROJECT_PATH should point to the project "
+                "    Fix: MAC_PROJECT_PATH should point to the project "
                 "root directory, not a file."
             )
-        _print_status("  Using local defaults for Apple detection")
+        _print_status("    Using local defaults for Apple detection")
     elif worker_info:
         # Daemon reachable and working -- override local Apple detection
-        _print_status(
-            f"  Worker project: {worker_info.get('xcode_scheme', '?')}"
-        )
+        apple_scheme = worker_info.get("xcode_scheme", "?")
+        apple_fw = worker_info.get("apple_frameworks", "")
+        apple_target = worker_info.get("min_deploy_target", "")
+        desc = " / ".join(filter(None, [apple_scheme, apple_fw, apple_target]))
+        _print_status(f"    Apple: {desc}")
         for wk, ak in [
             ("xcode_scheme", "XCODE_SCHEME"),
             ("apple_dir", "APPLE_DIR"),
@@ -1170,11 +1173,12 @@ def _build_auto_config(
                 apple[ak] = worker_info[wk]
     else:
         # Daemon unreachable
-        _print_status("  Worker unreachable (using local defaults)")
-        _print_status("  Troubleshooting:")
-        _print_status("    - Is the daemon running on the Mac?")
-        _print_status("    - Can you reach the Mac? (ping <hostname>)")
-        _print_status("    - Run: byfrost daemon status")
+        _print_status("    Unreachable (using local defaults)")
+        _print_status("    Troubleshooting:")
+        _print_status("      - Is the daemon running on the Mac?")
+        _print_status("      - Can you reach the Mac? (ping <hostname>)")
+        _print_status("      - Run: byfrost daemon status")
+    print()
 
     # Build agents
     agents: list[AgentConfig] = [AgentConfig(role="pm")]
@@ -1302,47 +1306,36 @@ def _display_summary(
     config: TeamConfig, detected: dict[str, list[str]],
 ) -> None:
     """Print a formatted summary of the detected configuration."""
-    # Detection summary
-    parts = []
-    for stack, indicators in detected.items():
-        parts.append(f"{stack} ({', '.join(indicators)})")
-    if parts:
-        _print_status(f"Detected: {', '.join(parts)}")
+    _print_bold(f"Team: {config.team_size} agents")
     print()
 
-    # Project info
-    _print_status(f"Project:    {config.project_name}")
-    _print_status(f"Controller: {config.controller_hostname}")
-    worker_label = config.worker_hostname or "(not detected - will prompt)"
-    _print_status(f"Worker:     {worker_label}")
-    print()
-
-    # Team table
-    _print_status(f"Team ({config.team_size} agents):")
-    _print_status(f"  {'PM':<16} {config.controller_hostname:<20} Plans, routes, compounds")
-
-    apple = config.get_agent("apple")
-    apple_desc = apple.settings.get("APPLE_FRAMEWORKS", "SwiftUI") if apple else "SwiftUI"
-    apple_target = apple.settings.get("MIN_DEPLOY_TARGET", "") if apple else ""
-    worker = config.worker_hostname or "?"
-    _print_status(f"  {'Apple Eng':<16} {worker:<20} {apple_desc}, {apple_target}")
-
-    _print_status(f"  {'QA Eng':<16} {config.controller_hostname:<20} Stream monitoring + review")
-
+    # Controller
+    _print_status(f"Controller ({config.controller_hostname}):")
+    _print_status(f"  {'PM':<16} Plans, routes, compounds")
+    _print_status(f"  {'QA Eng':<16} Stream monitoring + review")
     be = config.get_agent("backend")
     if be:
         fw = be.settings.get("BACKEND_FRAMEWORK", "")
         lang = be.settings.get("BACKEND_LANGUAGE", "")
         db = be.settings.get("DATABASE_TYPE", "")
         desc = " / ".join(filter(None, [fw, lang, db]))
-        _print_status(f"  {'Back End':<16} {config.controller_hostname:<20} {desc}")
-
+        _print_status(f"  {'Back End':<16} {desc}")
     fe = config.get_agent("frontend")
     if fe:
         fw = fe.settings.get("FRONTEND_FRAMEWORK", "")
         port = fe.settings.get("FRONTEND_PORT", "")
         desc = " / ".join(filter(None, [fw, f"port {port}" if port else ""]))
-        _print_status(f"  {'Front End':<16} {config.controller_hostname:<20} {desc}")
+        _print_status(f"  {'Front End':<16} {desc}")
+    print()
+
+    # Worker
+    worker = config.worker_hostname or "(not connected)"
+    _print_status(f"Worker ({worker}):")
+    apple = config.get_agent("apple")
+    apple_desc = apple.settings.get("APPLE_FRAMEWORKS", "SwiftUI") if apple else "SwiftUI"
+    apple_target = apple.settings.get("MIN_DEPLOY_TARGET", "") if apple else ""
+    desc = ", ".join(filter(None, [apple_desc, apple_target]))
+    _print_status(f"  {'Apple Eng':<16} {desc}")
 
 
 def _edit_fields(
