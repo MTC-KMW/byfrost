@@ -587,6 +587,7 @@ class ByfrostDaemon:
                     "task.status": self._handle_status,
                     "session.attach": self._handle_attach,
                     "ping": self._handle_ping,
+                    "project.info": self._handle_project_info,
                 }.get(msg_type)
 
                 if handler:
@@ -718,6 +719,65 @@ class ByfrostDaemon:
             "tmux_session": task.tmux_session,
             "hint": f"tmux attach -t {task.tmux_session}",
         })
+
+    async def _handle_project_info(self, ws, msg, source="unknown"):
+        """Return project details from the worker's project directory."""
+        project = self.config["project_path"]
+        info: dict = {"project_path": project}
+
+        if project:
+            project_dir = Path(project)
+            # Detect Xcode project
+            xcodeprojs = list(project_dir.glob("*.xcodeproj"))
+            if xcodeprojs:
+                info["xcode_scheme"] = xcodeprojs[0].stem
+                info["apple_dir"] = "."
+            else:
+                # Check subdirectories one level deep
+                xcodeprojs = list(project_dir.glob("*/*.xcodeproj"))
+                if xcodeprojs:
+                    info["xcode_scheme"] = xcodeprojs[0].stem
+                    rel = xcodeprojs[0].parent.relative_to(project_dir)
+                    info["apple_dir"] = str(rel)
+
+            # Scan Swift files for frameworks
+            swift_files = list(project_dir.rglob("*.swift"))[:30]
+            frameworks: set[str] = set()
+            known = {
+                "SwiftUI", "UIKit", "AppKit", "SwiftData", "CoreData",
+                "Combine", "MapKit", "CloudKit", "StoreKit", "WidgetKit",
+            }
+            for sf in swift_files:
+                try:
+                    for line in sf.read_text().splitlines()[:30]:
+                        line = line.strip()
+                        if line.startswith("import "):
+                            fw = line.split()[1] if len(line.split()) > 1 else ""
+                            if fw in known:
+                                frameworks.add(fw)
+                except OSError:
+                    continue
+            if frameworks:
+                info["apple_frameworks"] = ", ".join(sorted(frameworks))
+
+            # Detect deployment target from Package.swift
+            pkg_swift = project_dir / "Package.swift"
+            if pkg_swift.exists():
+                try:
+                    import re as _re
+                    content = pkg_swift.read_text()
+                    pat = r"\.(iOS|macOS)\(.v(\d+(?:_\d+)?)\)"
+                    targets = []
+                    for m in _re.finditer(pat, content):
+                        plat = m.group(1)
+                        ver = m.group(2).replace("_", ".")
+                        targets.append(f"{plat} {ver}")
+                    if targets:
+                        info["min_deploy_target"] = " / ".join(targets)
+                except OSError:
+                    pass
+
+        await self._send(ws, "project.info", info)
 
     async def _handle_ping(self, ws, msg, source="unknown"):
         await self._send(ws, "pong", {

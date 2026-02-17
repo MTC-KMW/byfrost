@@ -807,6 +807,8 @@ async def _do_connect(worker_hint: str | None) -> int:
 
     # Update auth.json
     auth["pairing_id"] = pairing_id
+    auth["worker_name"] = worker["name"]
+    auth["worker_platform"] = worker.get("platform", "")
     if worker_addresses:
         auth["worker_addresses"] = worker_addresses
     save_auth(auth)

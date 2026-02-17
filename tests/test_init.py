@@ -417,16 +417,10 @@ class TestInitWizard:
     """Full wizard flow with mocked input."""
 
     def test_3_agent_team(self, tmp_path: Path) -> None:
+        """Auto-detect finds no stacks -> 3 agents. User confirms."""
         inputs = iter([
-            "y",           # Install default team?
-            "1",           # Team size: 3
-            "TestApp",     # Project name
-            "controller",  # Controller hostname
-            "mac-mini",    # Worker hostname
-            "apple",       # Apple directory
-            "TestApp",     # Xcode scheme
-            "SwiftUI",     # Frameworks
-            "iOS 17.0",    # Min deploy
+            "y",    # Install default team?
+            "y",    # Look good? (auto-detected 3 agents)
         ])
 
         with patch("builtins.input", lambda _: next(inputs)):
@@ -441,34 +435,24 @@ class TestInitWizard:
         assert (tmp_path / "shared" / "api-spec.yaml").exists()
         assert (tmp_path / "compound" / "patterns.md").exists()
         assert (tmp_path / ".byfrost-team.json").exists()
-        # No backend/frontend dirs
+        # No backend/frontend dirs (no stacks detected)
         assert not (tmp_path / "backend" / "CLAUDE.md").exists()
         assert not (tmp_path / "web" / "CLAUDE.md").exists()
 
     def test_5_agent_team(self, tmp_path: Path) -> None:
+        """Auto-detect finds backend + frontend stacks -> 5 agents."""
+        # Create indicator files so detection finds both stacks
+        (tmp_path / "requirements.txt").write_text("flask\npsycopg2\n")
+        (tmp_path / "package.json").write_text(json.dumps({
+            "name": "my-app",
+            "dependencies": {"react": "^18.0.0"},
+            "scripts": {"dev": "vite", "build": "vite build", "test": "vitest"},
+        }))
+        (tmp_path / "app.py").write_text("from flask import Flask\napp = Flask(__name__)\n")
+
         inputs = iter([
-            "y",           # Install default team?
-            "3",           # Team size: 5
-            "MyApp",       # Project name
-            "linux-box",   # Controller hostname
-            "mac-pro",     # Worker hostname
-            "apple",       # Apple directory
-            "MyApp",       # Xcode scheme
-            "SwiftUI",     # Frameworks
-            "iOS 17.0",    # Min deploy
-            "backend",     # Backend directory
-            "FastAPI",     # Backend framework
-            "Python",      # Backend language
-            "8000",        # Backend port
-            "app.main:app",  # Backend entry
-            "pytest",      # Backend test cmd
-            "PostgreSQL",  # Backend DB
-            "web",         # Frontend directory
-            "React",       # Frontend framework
-            "npm run dev", # Frontend dev cmd
-            "3000",        # Frontend port
-            "npm run build",  # Frontend build
-            "npm test",    # Frontend test
+            "y",    # Install default team?
+            "y",    # Look good? (auto-detected 5 agents)
         ])
 
         with patch("builtins.input", lambda _: next(inputs)):
@@ -476,10 +460,6 @@ class TestInitWizard:
             result = run_init_wizard(tmp_path)
 
         assert result == 0
-        assert (tmp_path / "backend" / "CLAUDE.md").exists()
-        assert (tmp_path / "web" / "CLAUDE.md").exists()
-        assert (tmp_path / "tasks" / "backend" / "current.md").exists()
-        assert (tmp_path / "tasks" / "web" / "current.md").exists()
 
         # Verify config
         config = TeamConfig.load(tmp_path)
@@ -487,6 +467,53 @@ class TestInitWizard:
         assert config.team_size == 5
         assert config.has_agent("backend")
         assert config.has_agent("frontend")
+        assert config.project_name == "my-app"  # from package.json
+
+        # Backend detection
+        be = config.get_agent("backend")
+        assert be is not None
+        assert be.settings["BACKEND_FRAMEWORK"] == "Flask"
+        assert be.settings["BACKEND_LANGUAGE"] == "Python"
+        assert be.settings["DATABASE_TYPE"] == "PostgreSQL"
+
+        # Frontend detection
+        fe = config.get_agent("frontend")
+        assert fe is not None
+        assert fe.settings["FRONTEND_FRAMEWORK"] == "React"
+
+    def test_auto_detect_backend_only(self, tmp_path: Path) -> None:
+        """Auto-detect finds backend but no frontend -> 4 agents."""
+        (tmp_path / "requirements.txt").write_text("fastapi\nuvicorn\n")
+
+        inputs = iter([
+            "y",    # Install default team?
+            "y",    # Look good?
+        ])
+
+        with patch("builtins.input", lambda _: next(inputs)):
+            from agents.init import run_init_wizard
+            result = run_init_wizard(tmp_path)
+
+        assert result == 0
+        config = TeamConfig.load(tmp_path)
+        assert config is not None
+        assert config.team_size == 4
+        assert config.has_agent("backend")
+        assert not config.has_agent("frontend")
+
+    def test_cancel_at_confirmation(self, tmp_path: Path) -> None:
+        """User says 'n' at confirmation -> no files created."""
+        inputs = iter([
+            "y",    # Install default team?
+            "n",    # Look good? -> No
+        ])
+
+        with patch("builtins.input", lambda _: next(inputs)):
+            from agents.init import run_init_wizard
+            result = run_init_wizard(tmp_path)
+
+        assert result == 0
+        assert not (tmp_path / ".byfrost-team.json").exists()
 
     def test_custom_mode(self, tmp_path: Path) -> None:
         inputs = iter([

@@ -10,6 +10,7 @@ Usage: byfrost init  (run in project root)
 import json
 import platform
 import re
+import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -209,6 +210,78 @@ def detect_project_stacks(project_dir: Path) -> dict[str, list[str]]:
     return found
 
 
+def detect_project_name(project_dir: Path) -> str:
+    """Auto-detect project name from project metadata files.
+
+    Priority: package.json > pyproject.toml > *.xcodeproj > git remote > dir name.
+    """
+    # package.json
+    pkg_json = project_dir / "package.json"
+    if pkg_json.exists():
+        try:
+            pkg = json.loads(pkg_json.read_text())
+            name = pkg.get("name", "")
+            if name and not name.startswith("@"):
+                return name
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # pyproject.toml
+    pyproject = project_dir / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            content = pyproject.read_text()
+            for pattern in [r'name\s*=\s*"([^"]+)"', r"name\s*=\s*'([^']+)'"]:
+                m = re.search(pattern, content)
+                if m:
+                    return m.group(1)
+        except OSError:
+            pass
+
+    # Xcode project
+    xcodeprojs = list(project_dir.glob("*.xcodeproj"))
+    if xcodeprojs:
+        return xcodeprojs[0].stem
+
+    # Git remote
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_dir), "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            url = result.stdout.strip()
+            name = url.rstrip("/").rsplit("/", 1)[-1]
+            if name.endswith(".git"):
+                name = name[:-4]
+            if name:
+                return name
+    except (FileNotFoundError, OSError):
+        pass
+
+    return project_dir.name
+
+
+def detect_team_size(
+    detected_stacks: dict[str, list[str]],
+) -> tuple[int, bool, bool]:
+    """Determine team size from detected stacks.
+
+    Returns (team_size, has_backend, has_frontend).
+    Base team is always 3: PM + Apple Engineer + QA.
+    """
+    has_backend = "backend" in detected_stacks
+    has_frontend = "frontend" in detected_stacks
+
+    if has_backend and has_frontend:
+        return 5, True, True
+    if has_backend:
+        return 4, True, False
+    if has_frontend:
+        return 4, False, True
+    return 3, False, False
+
+
 def detect_apple_details(project_dir: Path) -> dict[str, str]:
     """Auto-detect Apple project details."""
     details: dict[str, str] = {}
@@ -218,10 +291,46 @@ def detect_apple_details(project_dir: Path) -> dict[str, str]:
         details["XCODE_SCHEME"] = xcodeprojs[0].stem
         parent = xcodeprojs[0].parent
         rel = parent.relative_to(project_dir)
-        details["APPLE_DIR"] = str(rel) if str(rel) != "." else "apple"
+        details["APPLE_DIR"] = str(rel) if str(rel) != "." else "."
 
     if (project_dir / "Package.swift").exists():
         details.setdefault("APPLE_DIR", ".")
+        # Parse deployment target from Package.swift
+        try:
+            content = (project_dir / "Package.swift").read_text()
+            # Match .iOS(.vNN) or .macOS(.vNN)
+            targets = []
+            pat = r"\.(iOS|macOS|watchOS|tvOS|visionOS)\(.v(\d+(?:_\d+)?)\)"
+            for m in re.finditer(pat, content):
+                plat = m.group(1)
+                ver = m.group(2).replace("_", ".")
+                targets.append(f"{plat} {ver}")
+            if targets:
+                details["MIN_DEPLOY_TARGET"] = " / ".join(targets)
+        except OSError:
+            pass
+
+    # Scan Swift files for framework imports (sample up to 30 files)
+    swift_files = list(project_dir.rglob("*.swift"))[:30]
+    if swift_files:
+        frameworks: set[str] = set()
+        known = {
+            "SwiftUI", "UIKit", "AppKit", "SwiftData", "CoreData",
+            "Combine", "RealityKit", "MapKit", "CloudKit", "StoreKit",
+            "WidgetKit", "GameKit", "ARKit", "SceneKit", "SpriteKit",
+        }
+        for sf in swift_files:
+            try:
+                for line in sf.read_text().splitlines()[:30]:
+                    line = line.strip()
+                    if line.startswith("import "):
+                        fw = line.split()[1] if len(line.split()) > 1 else ""
+                        if fw in known:
+                            frameworks.add(fw)
+            except OSError:
+                continue
+        if frameworks:
+            details["APPLE_FRAMEWORKS"] = ", ".join(sorted(frameworks))
 
     details.setdefault("APPLE_FRAMEWORKS", "SwiftUI")
     details.setdefault("MIN_DEPLOY_TARGET", "iOS 17.0 / macOS 14.0")
@@ -239,40 +348,232 @@ def detect_backend_details(project_dir: Path) -> dict[str, str]:
             content = path.read_text().lower()
             if "fastapi" in content:
                 details["BACKEND_FRAMEWORK"] = "FastAPI"
+                details.setdefault("BACKEND_ENTRY", "app.main:app")
+                details.setdefault("BACKEND_PORT", "8000")
             elif "flask" in content:
                 details["BACKEND_FRAMEWORK"] = "Flask"
+                details.setdefault("BACKEND_PORT", "5000")
+                # Scan for common Flask entry points
+                for entry in ["app.py", "wsgi.py", "run.py", "main.py"]:
+                    if (project_dir / entry).exists():
+                        details.setdefault("BACKEND_ENTRY", entry)
+                        break
+                details.setdefault("BACKEND_ENTRY", "app.py")
             elif "django" in content:
                 details["BACKEND_FRAMEWORK"] = "Django"
+                details.setdefault("BACKEND_ENTRY", "manage.py runserver")
+                details.setdefault("BACKEND_PORT", "8000")
+                details.setdefault("BACKEND_TEST_CMD", "python manage.py test")
             break
 
+    # More languages
     if (project_dir / "go.mod").exists():
         details.setdefault("BACKEND_LANGUAGE", "Go")
+        details.setdefault("BACKEND_ENTRY", "main.go")
+        details.setdefault("BACKEND_TEST_CMD", "go test ./...")
     if (project_dir / "Cargo.toml").exists():
         details.setdefault("BACKEND_LANGUAGE", "Rust")
+        details.setdefault("BACKEND_ENTRY", "src/main.rs")
+        details.setdefault("BACKEND_TEST_CMD", "cargo test")
+    if (project_dir / "Gemfile").exists():
+        details.setdefault("BACKEND_LANGUAGE", "Ruby")
+        try:
+            content = (project_dir / "Gemfile").read_text().lower()
+            if "rails" in content:
+                details.setdefault("BACKEND_FRAMEWORK", "Rails")
+                details.setdefault("BACKEND_ENTRY", "bin/rails server")
+                details.setdefault("BACKEND_TEST_CMD", "rails test")
+        except OSError:
+            pass
+    if (project_dir / "pom.xml").exists():
+        details.setdefault("BACKEND_LANGUAGE", "Java")
+        try:
+            content = (project_dir / "pom.xml").read_text().lower()
+            if "spring-boot" in content:
+                details.setdefault("BACKEND_FRAMEWORK", "Spring Boot")
+        except OSError:
+            pass
+        details.setdefault("BACKEND_TEST_CMD", "mvn test")
+    if (project_dir / "composer.json").exists():
+        details.setdefault("BACKEND_LANGUAGE", "PHP")
+        try:
+            pkg = json.loads((project_dir / "composer.json").read_text())
+            deps = {**pkg.get("require", {}), **pkg.get("require-dev", {})}
+            if "laravel/framework" in deps:
+                details.setdefault("BACKEND_FRAMEWORK", "Laravel")
+                details.setdefault("BACKEND_ENTRY", "artisan serve")
+                details.setdefault("BACKEND_TEST_CMD", "php artisan test")
+        except (json.JSONDecodeError, OSError):
+            pass
 
-    details.setdefault("BACKEND_DIR", "backend")
+    # Detect test command from common Python patterns
+    if details.get("BACKEND_LANGUAGE") == "Python":
+        if (project_dir / "pytest.ini").exists() or (project_dir / "tests").is_dir():
+            details.setdefault("BACKEND_TEST_CMD", "pytest tests/")
+        elif (project_dir / "test").is_dir():
+            details.setdefault("BACKEND_TEST_CMD", "pytest test/")
+        else:
+            details.setdefault("BACKEND_TEST_CMD", "pytest")
+
+    # Detect database from Python deps
+    for req_file in ["requirements.txt", "pyproject.toml"]:
+        path = project_dir / req_file
+        if path.exists():
+            try:
+                content = path.read_text().lower()
+                if "psycopg" in content or "sqlalchemy" in content:
+                    details.setdefault("DATABASE_TYPE", "PostgreSQL")
+                elif "pymongo" in content or "motor" in content:
+                    details.setdefault("DATABASE_TYPE", "MongoDB")
+                elif "mysql" in content or "pymysql" in content:
+                    details.setdefault("DATABASE_TYPE", "MySQL")
+                elif "sqlite" in content:
+                    details.setdefault("DATABASE_TYPE", "SQLite")
+            except OSError:
+                pass
+            break
+
+    # Detect database from docker-compose
+    for dc_file in ["docker-compose.yml", "docker-compose.yaml", "compose.yml"]:
+        dc_path = project_dir / dc_file
+        if dc_path.exists():
+            try:
+                content = dc_path.read_text().lower()
+                if "postgres" in content:
+                    details.setdefault("DATABASE_TYPE", "PostgreSQL")
+                elif "mysql" in content or "mariadb" in content:
+                    details.setdefault("DATABASE_TYPE", "MySQL")
+                elif "mongo" in content:
+                    details.setdefault("DATABASE_TYPE", "MongoDB")
+            except OSError:
+                pass
+            break
+
+    # Detect database/port from .env files
+    for env_file in [".env", ".env.example", ".env.local"]:
+        env_path = project_dir / env_file
+        if env_path.exists():
+            try:
+                content = env_path.read_text()
+                # DATABASE_URL scheme
+                db_match = re.search(r"DATABASE_URL\s*=\s*(\w+)://", content)
+                if db_match:
+                    scheme = db_match.group(1).lower()
+                    if "postgres" in scheme:
+                        details.setdefault("DATABASE_TYPE", "PostgreSQL")
+                    elif "mysql" in scheme:
+                        details.setdefault("DATABASE_TYPE", "MySQL")
+                    elif "sqlite" in scheme:
+                        details.setdefault("DATABASE_TYPE", "SQLite")
+                    elif "mongo" in scheme:
+                        details.setdefault("DATABASE_TYPE", "MongoDB")
+                # Port from env
+                port_match = re.search(
+                    r"(?:PORT|APP_PORT|SERVER_PORT)\s*=\s*(\d{4,5})", content,
+                )
+                if port_match:
+                    details.setdefault("BACKEND_PORT", port_match.group(1))
+            except OSError:
+                pass
+            break
+
+    # Detect backend directory
+    for candidate in ["backend", "server", "api", "src", "app"]:
+        if (project_dir / candidate).is_dir():
+            details.setdefault("BACKEND_DIR", candidate)
+            break
+
+    details.setdefault("BACKEND_DIR", ".")
     details.setdefault("BACKEND_PORT", "8000")
     return details
+
+
+def _detect_package_manager(project_dir: Path) -> str:
+    """Detect the frontend package manager from lock files."""
+    if (project_dir / "bun.lockb").exists() or (project_dir / "bun.lock").exists():
+        return "bun"
+    if (project_dir / "pnpm-lock.yaml").exists():
+        return "pnpm"
+    if (project_dir / "yarn.lock").exists():
+        return "yarn"
+    return "npm"
 
 
 def detect_frontend_details(project_dir: Path) -> dict[str, str]:
     """Auto-detect frontend project details."""
     details: dict[str, str] = {}
 
-    pkg_json = project_dir / "package.json"
-    if pkg_json.exists():
+    # Find package.json -- check subdirectories too
+    pkg_path = None
+    pkg_dir = project_dir
+    for candidate in [
+        project_dir / "package.json",
+        project_dir / "web" / "package.json",
+        project_dir / "frontend" / "package.json",
+        project_dir / "client" / "package.json",
+    ]:
+        if candidate.exists():
+            pkg_path = candidate
+            pkg_dir = candidate.parent
+            # Set frontend dir from where we found it
+            rel = candidate.parent.relative_to(project_dir)
+            if str(rel) != ".":
+                details["FRONTEND_DIR"] = str(rel)
+            break
+
+    if pkg_path:
+        # Detect package manager from lock files
+        pm = _detect_package_manager(pkg_dir)
+        run_prefix = {"npm": "npm run ", "yarn": "yarn ", "pnpm": "pnpm ", "bun": "bun run "}[pm]
+        run_cmd = {"npm": "npm", "yarn": "yarn", "pnpm": "pnpm", "bun": "bun"}[pm]
+
         try:
-            pkg = json.loads(pkg_json.read_text())
+            pkg = json.loads(pkg_path.read_text())
             deps: dict[str, Any] = {
                 **pkg.get("dependencies", {}),
                 **pkg.get("devDependencies", {}),
             }
-            if "react" in deps or "next" in deps:
-                details["FRONTEND_FRAMEWORK"] = "Next.js" if "next" in deps else "React"
+            scripts = pkg.get("scripts", {})
+
+            # Detect framework
+            if "next" in deps:
+                details["FRONTEND_FRAMEWORK"] = "Next.js"
+            elif "@remix-run/react" in deps:
+                details["FRONTEND_FRAMEWORK"] = "Remix"
+            elif "nuxt" in deps:
+                details["FRONTEND_FRAMEWORK"] = "Nuxt"
+            elif "gatsby" in deps:
+                details["FRONTEND_FRAMEWORK"] = "Gatsby"
+            elif "astro" in deps:
+                details["FRONTEND_FRAMEWORK"] = "Astro"
+            elif "react" in deps or "react-dom" in deps:
+                details["FRONTEND_FRAMEWORK"] = "React"
             elif "vue" in deps:
                 details["FRONTEND_FRAMEWORK"] = "Vue"
+            elif "@sveltejs/kit" in deps:
+                details["FRONTEND_FRAMEWORK"] = "SvelteKit"
             elif "svelte" in deps:
                 details["FRONTEND_FRAMEWORK"] = "Svelte"
+            elif "@angular/core" in deps:
+                details["FRONTEND_FRAMEWORK"] = "Angular"
+            elif "solid-js" in deps:
+                details["FRONTEND_FRAMEWORK"] = "SolidJS"
+
+            # Detect commands from scripts (adjusted for package manager)
+            if "dev" in scripts:
+                details["FRONTEND_DEV_CMD"] = f"{run_prefix}dev"
+            elif "start" in scripts:
+                details["FRONTEND_DEV_CMD"] = f"{run_cmd} start"
+            if "build" in scripts:
+                details["FRONTEND_BUILD_CMD"] = f"{run_prefix}build"
+            if "test" in scripts:
+                details["FRONTEND_TEST_CMD"] = f"{run_cmd} test"
+
+            # Detect port from dev script
+            dev_script = scripts.get("dev", "") + scripts.get("start", "")
+            port_match = re.search(r"(?:--port|PORT=?|-p)\s*(\d{4,5})", dev_script)
+            if port_match:
+                details["FRONTEND_PORT"] = port_match.group(1)
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -664,139 +965,186 @@ def _init_custom(project_dir: Path) -> int:
     return 0
 
 
-def _init_default_team(project_dir: Path) -> int:
-    """Full default team setup wizard."""
-    print()
+def _detect_byfrost_connection() -> dict[str, str]:
+    """Pull device and pairing info from ~/.byfrost/auth.json and server.
 
-    # Scan for project indicators
-    _print_status("Scanning project directory...")
+    Returns dict with worker_hostname (if available).
+    """
+    info: dict[str, str] = {}
+    try:
+        from cli.api_client import ByfrostAPIClient, load_auth
+        auth = load_auth()
+        if not auth:
+            return info
+
+        # Check locally first
+        if auth.get("worker_name"):
+            info["worker_hostname"] = auth["worker_name"]
+            return info
+
+        # Query server for device list to find worker name
+        if auth.get("access_token"):
+            import asyncio
+            async def _fetch_worker_name() -> str | None:
+                api = ByfrostAPIClient(server_url=auth.get("server_url"))
+                devices = await api.list_devices(auth["access_token"])
+                for d in devices:
+                    if d.get("role") == "worker":
+                        return str(d.get("name", ""))
+                return None
+            name = asyncio.run(_fetch_worker_name())
+            if name:
+                info["worker_hostname"] = name
+    except Exception:
+        pass
+    return info
+
+
+def _fetch_worker_project_info() -> dict[str, str]:
+    """Query the worker daemon for Apple project details.
+
+    Connects via WebSocket, sends project.info request, returns response.
+    Returns empty dict if worker is unreachable.
+    """
+    try:
+        import asyncio
+
+        from cli.main import load_config
+        from core.security import MessageSigner
+
+        config = load_config()
+        host = config["host"]
+        port = config["port"]
+        secret = config["secret"]
+
+        async def _query() -> dict[str, str]:
+            import websockets
+
+            from core.security import TLSManager
+
+            use_tls = TLSManager.has_client_certs()
+            protocol = "wss" if use_tls else "ws"
+            uri = f"{protocol}://{host}:{port}"
+
+            ssl_ctx = None
+            if use_tls:
+                try:
+                    ssl_ctx = TLSManager.get_client_ssl_context()
+                except Exception:
+                    uri = f"ws://{host}:{port}"
+
+            signer = MessageSigner(secret) if secret else None
+
+            async with websockets.connect(
+                uri, ssl=ssl_ctx, open_timeout=5, close_timeout=3,
+            ) as ws:
+                msg: dict[str, Any] = {"type": "project.info"}
+                if signer:
+                    msg.update(signer.sign(msg))
+                await ws.send(json.dumps(msg))
+
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                data = json.loads(raw)
+                if data.get("type") == "project.info":
+                    result: dict[str, str] = {}
+                    for key in (
+                        "xcode_scheme", "apple_dir",
+                        "apple_frameworks", "min_deploy_target",
+                    ):
+                        if data.get(key):
+                            result[key] = str(data[key])
+                    return result
+            return {}
+
+        return asyncio.run(_query())
+    except Exception:
+        return {}
+
+
+def _build_auto_config(
+    project_dir: Path,
+) -> tuple[TeamConfig, list[tuple[str, str, str]]]:
+    """Auto-detect everything and build a TeamConfig.
+
+    Returns (config, fields) where fields is a list of
+    (label, key, value) tuples for display and editing.
+    """
+    # Detect stacks
     detected = detect_project_stacks(project_dir)
-    if detected:
-        _print_status("Detected stacks:")
-        for stack, indicators in detected.items():
-            _print_status(f"  {stack}: {', '.join(indicators)}")
+    team_size, has_backend, has_frontend = detect_team_size(detected)
+
+    # Project info
+    project_name = detect_project_name(project_dir)
+    controller_hostname = platform.node()
+    connection = _detect_byfrost_connection()
+    worker_hostname = connection.get("worker_hostname", "")
+
+    # Stack details (local)
+    apple = detect_apple_details(project_dir)
+    backend = detect_backend_details(project_dir) if has_backend else {}
+    frontend = detect_frontend_details(project_dir) if has_frontend else {}
+
+    # Query worker daemon for Apple project details (remote)
+    _print_status("Querying worker for Apple project details...")
+    worker_info = _fetch_worker_project_info()
+    if worker_info:
+        _print_status(f"  Worker project: {worker_info.get('xcode_scheme', '?')}")
+        # Worker info overrides local Apple detection
+        for wk, ak in [
+            ("xcode_scheme", "XCODE_SCHEME"),
+            ("apple_dir", "APPLE_DIR"),
+            ("apple_frameworks", "APPLE_FRAMEWORKS"),
+            ("min_deploy_target", "MIN_DEPLOY_TARGET"),
+        ]:
+            if wk in worker_info:
+                apple[ak] = worker_info[wk]
     else:
-        _print_status("No known project indicators found.")
-    print()
+        _print_status("  Worker unreachable (using local defaults)")
 
-    # Team size
-    size_idx = _prompt_choice(
-        "Team size:",
-        [
-            "3 agents - PM + Apple Engineer + QA",
-            "4 agents - add Back End or Front End",
-            "5 agents - all five agents",
-        ],
-        default=0,
-    )
-    team_size = [3, 4, 5][size_idx]
+    # Build agents
+    agents: list[AgentConfig] = [AgentConfig(role="pm")]
 
-    has_backend = team_size >= 5
-    has_frontend = team_size >= 5
-
-    if team_size == 4:
-        print()
-        add_idx = _prompt_choice(
-            "Add which agent?",
-            ["Back End Engineer", "Front End Engineer"],
-            default=0 if "backend" in detected else 1,
-        )
-        has_backend = add_idx == 0
-        has_frontend = add_idx == 1
-
-    print()
-
-    # Common details
-    project_name = _prompt("Project name", default=project_dir.name)
-    controller_hostname = _prompt("Controller hostname", default=platform.node())
-    worker_hostname = _prompt("Worker (Mac) hostname", default="")
-
-    # Build agents list
-    agents: list[AgentConfig] = []
-
-    # PM (always)
-    agents.append(AgentConfig(role="pm"))
-
-    # Apple (always)
-    print()
-    _print_status("Apple Engineer configuration:")
-    apple_details = detect_apple_details(project_dir)
-    apple_dir = _prompt("Apple directory", default=apple_details.get("APPLE_DIR", "apple"))
-    xcode_scheme = _prompt(
-        "Xcode scheme", default=apple_details.get("XCODE_SCHEME", project_name),
-    )
-    frameworks = _prompt(
-        "Frameworks", default=apple_details.get("APPLE_FRAMEWORKS", "SwiftUI"),
-    )
-    min_deploy = _prompt(
-        "Min deployment target",
-        default=apple_details.get("MIN_DEPLOY_TARGET", "iOS 17.0"),
-    )
+    apple_dir = apple.get("APPLE_DIR", "apple")
+    xcode_scheme = apple.get("XCODE_SCHEME", project_name)
+    frameworks = apple.get("APPLE_FRAMEWORKS", "SwiftUI")
+    min_deploy = apple.get("MIN_DEPLOY_TARGET", "iOS 17.0 / macOS 14.0")
     agents.append(AgentConfig(
-        role="apple",
-        directory=apple_dir,
+        role="apple", directory=apple_dir,
         settings={
-            "APPLE_DIR": apple_dir,
-            "XCODE_SCHEME": xcode_scheme,
-            "APPLE_FRAMEWORKS": frameworks,
-            "MIN_DEPLOY_TARGET": min_deploy,
+            "APPLE_DIR": apple_dir, "XCODE_SCHEME": xcode_scheme,
+            "APPLE_FRAMEWORKS": frameworks, "MIN_DEPLOY_TARGET": min_deploy,
         },
     ))
 
-    # QA (always)
     agents.append(AgentConfig(role="qa"))
 
-    # Backend (optional)
     if has_backend:
-        print()
-        _print_status("Back End Engineer configuration:")
-        bd = detect_backend_details(project_dir)
-        backend_dir = _prompt("Backend directory", default=bd.get("BACKEND_DIR", "backend"))
-        backend_framework = _prompt("Framework", default=bd.get("BACKEND_FRAMEWORK", ""))
-        backend_language = _prompt("Language", default=bd.get("BACKEND_LANGUAGE", "Python"))
-        backend_port = _prompt("Port", default=bd.get("BACKEND_PORT", "8000"))
-        backend_entry = _prompt("Entry point", default="app.main:app")
-        backend_test = _prompt("Test command", default="pytest tests/")
-        db_type = _prompt("Database type", default="PostgreSQL")
+        bd = {
+            "BACKEND_DIR": backend.get("BACKEND_DIR", "backend"),
+            "BACKEND_FRAMEWORK": backend.get("BACKEND_FRAMEWORK", ""),
+            "BACKEND_LANGUAGE": backend.get("BACKEND_LANGUAGE", "Python"),
+            "BACKEND_PORT": backend.get("BACKEND_PORT", "8000"),
+            "BACKEND_ENTRY": backend.get("BACKEND_ENTRY", "app.main:app"),
+            "BACKEND_TEST_CMD": backend.get("BACKEND_TEST_CMD", "pytest tests/"),
+            "DATABASE_TYPE": backend.get("DATABASE_TYPE", "PostgreSQL"),
+        }
         agents.append(AgentConfig(
-            role="backend",
-            directory=backend_dir,
-            settings={
-                "BACKEND_DIR": backend_dir,
-                "BACKEND_FRAMEWORK": backend_framework,
-                "BACKEND_LANGUAGE": backend_language,
-                "BACKEND_PORT": backend_port,
-                "BACKEND_ENTRY": backend_entry,
-                "BACKEND_TEST_CMD": backend_test,
-                "DATABASE_TYPE": db_type,
-            },
+            role="backend", directory=bd["BACKEND_DIR"], settings=bd,
         ))
 
-    # Frontend (optional)
     if has_frontend:
-        print()
-        _print_status("Front End Engineer configuration:")
-        fd = detect_frontend_details(project_dir)
-        frontend_dir = _prompt("Frontend directory", default=fd.get("FRONTEND_DIR", "web"))
-        frontend_framework = _prompt("Framework", default=fd.get("FRONTEND_FRAMEWORK", ""))
-        frontend_dev = _prompt("Dev command", default="npm run dev")
-        frontend_port = _prompt("Port", default=fd.get("FRONTEND_PORT", "3000"))
-        frontend_build = _prompt("Build command", default="npm run build")
-        frontend_test = _prompt("Test command", default="npm test")
+        fd = {
+            "FRONTEND_DIR": frontend.get("FRONTEND_DIR", "web"),
+            "FRONTEND_FRAMEWORK": frontend.get("FRONTEND_FRAMEWORK", ""),
+            "FRONTEND_DEV_CMD": frontend.get("FRONTEND_DEV_CMD", "npm run dev"),
+            "FRONTEND_PORT": frontend.get("FRONTEND_PORT", "3000"),
+            "FRONTEND_BUILD_CMD": frontend.get("FRONTEND_BUILD_CMD", "npm run build"),
+            "FRONTEND_TEST_CMD": frontend.get("FRONTEND_TEST_CMD", "npm test"),
+        }
         agents.append(AgentConfig(
-            role="frontend",
-            directory=frontend_dir,
-            settings={
-                "FRONTEND_DIR": frontend_dir,
-                "FRONTEND_FRAMEWORK": frontend_framework,
-                "FRONTEND_DEV_CMD": frontend_dev,
-                "FRONTEND_PORT": frontend_port,
-                "FRONTEND_BUILD_CMD": frontend_build,
-                "FRONTEND_TEST_CMD": frontend_test,
-            },
+            role="frontend", directory=fd["FRONTEND_DIR"], settings=fd,
         ))
 
-    # Build config
     config = TeamConfig(
         project_name=project_name,
         controller_hostname=controller_hostname,
@@ -806,6 +1154,171 @@ def _init_default_team(project_dir: Path) -> int:
         communication_mode="hybrid",
         created_at=datetime.now(timezone.utc).isoformat(),
     )
+
+    # Build editable fields list: (label, config_path, value)
+    fields: list[tuple[str, str, str]] = [
+        ("Project name", "project_name", project_name),
+        ("Team size", "team_size", str(team_size)),
+        ("Controller", "controller_hostname", controller_hostname),
+        ("Worker (Mac)", "worker_hostname", worker_hostname),
+        ("Apple dir", "apple.APPLE_DIR", apple_dir),
+        ("Xcode scheme", "apple.XCODE_SCHEME", xcode_scheme),
+        ("Frameworks", "apple.APPLE_FRAMEWORKS", frameworks),
+        ("Min deploy target", "apple.MIN_DEPLOY_TARGET", min_deploy),
+    ]
+    if has_backend:
+        fields.extend([
+            ("Backend dir", "backend.BACKEND_DIR", bd["BACKEND_DIR"]),
+            ("Backend framework", "backend.BACKEND_FRAMEWORK", bd["BACKEND_FRAMEWORK"]),
+            ("Backend language", "backend.BACKEND_LANGUAGE", bd["BACKEND_LANGUAGE"]),
+            ("Backend port", "backend.BACKEND_PORT", bd["BACKEND_PORT"]),
+            ("Backend entry", "backend.BACKEND_ENTRY", bd["BACKEND_ENTRY"]),
+            ("Backend test cmd", "backend.BACKEND_TEST_CMD", bd["BACKEND_TEST_CMD"]),
+            ("Database type", "backend.DATABASE_TYPE", bd["DATABASE_TYPE"]),
+        ])
+    if has_frontend:
+        fields.extend([
+            ("Frontend dir", "frontend.FRONTEND_DIR", fd["FRONTEND_DIR"]),
+            ("Frontend framework", "frontend.FRONTEND_FRAMEWORK", fd["FRONTEND_FRAMEWORK"]),
+            ("Frontend dev cmd", "frontend.FRONTEND_DEV_CMD", fd["FRONTEND_DEV_CMD"]),
+            ("Frontend port", "frontend.FRONTEND_PORT", fd["FRONTEND_PORT"]),
+            ("Frontend build cmd", "frontend.FRONTEND_BUILD_CMD", fd["FRONTEND_BUILD_CMD"]),
+            ("Frontend test cmd", "frontend.FRONTEND_TEST_CMD", fd["FRONTEND_TEST_CMD"]),
+        ])
+
+    return config, fields
+
+
+def _apply_field_edit(
+    config: TeamConfig, fields: list[tuple[str, str, str]],
+    field_idx: int, new_value: str,
+) -> None:
+    """Apply a single field edit to the config and fields list."""
+    label, key, _ = fields[field_idx]
+    fields[field_idx] = (label, key, new_value)
+
+    # Update the config object
+    if key == "project_name":
+        config.project_name = new_value
+    elif key == "team_size":
+        config.team_size = int(new_value)
+    elif key == "controller_hostname":
+        config.controller_hostname = new_value
+    elif key == "worker_hostname":
+        config.worker_hostname = new_value
+    elif "." in key:
+        role, setting = key.split(".", 1)
+        agent = config.get_agent(role)
+        if agent:
+            agent.settings[setting] = new_value
+            if setting.endswith("_DIR"):
+                agent.directory = new_value
+
+
+def _display_summary(
+    config: TeamConfig, detected: dict[str, list[str]],
+) -> None:
+    """Print a formatted summary of the detected configuration."""
+    # Detection summary
+    parts = []
+    for stack, indicators in detected.items():
+        parts.append(f"{stack} ({', '.join(indicators)})")
+    if parts:
+        _print_status(f"Detected: {', '.join(parts)}")
+    print()
+
+    # Project info
+    _print_status(f"Project:    {config.project_name}")
+    _print_status(f"Controller: {config.controller_hostname}")
+    worker_label = config.worker_hostname or "(not detected - will prompt)"
+    _print_status(f"Worker:     {worker_label}")
+    print()
+
+    # Team table
+    _print_status(f"Team ({config.team_size} agents):")
+    _print_status(f"  {'PM':<16} {config.controller_hostname:<20} Plans, routes, compounds")
+
+    apple = config.get_agent("apple")
+    apple_desc = apple.settings.get("APPLE_FRAMEWORKS", "SwiftUI") if apple else "SwiftUI"
+    apple_target = apple.settings.get("MIN_DEPLOY_TARGET", "") if apple else ""
+    worker = config.worker_hostname or "?"
+    _print_status(f"  {'Apple Eng':<16} {worker:<20} {apple_desc}, {apple_target}")
+
+    _print_status(f"  {'QA Eng':<16} {config.controller_hostname:<20} Stream monitoring + review")
+
+    be = config.get_agent("backend")
+    if be:
+        fw = be.settings.get("BACKEND_FRAMEWORK", "")
+        lang = be.settings.get("BACKEND_LANGUAGE", "")
+        db = be.settings.get("DATABASE_TYPE", "")
+        desc = " / ".join(filter(None, [fw, lang, db]))
+        _print_status(f"  {'Back End':<16} {config.controller_hostname:<20} {desc}")
+
+    fe = config.get_agent("frontend")
+    if fe:
+        fw = fe.settings.get("FRONTEND_FRAMEWORK", "")
+        port = fe.settings.get("FRONTEND_PORT", "")
+        desc = " / ".join(filter(None, [fw, f"port {port}" if port else ""]))
+        _print_status(f"  {'Front End':<16} {config.controller_hostname:<20} {desc}")
+
+
+def _edit_fields(
+    config: TeamConfig, fields: list[tuple[str, str, str]],
+) -> None:
+    """Interactive field editor -- user picks a number and changes the value."""
+    while True:
+        print()
+        for i, (label, _, value) in enumerate(fields, 1):
+            print(f"  {i:>2}. {label + ':':<22} {value}")
+        print()
+        choice = input("  Edit field # (or Enter to accept all): ").strip()
+        if not choice:
+            break
+        try:
+            idx = int(choice) - 1
+            if idx < 0 or idx >= len(fields):
+                _print_error("Invalid field number.")
+                continue
+        except ValueError:
+            _print_error("Enter a number or press Enter to accept.")
+            continue
+
+        label, key, old_val = fields[idx]
+        new_val = input(f"  {label} [{old_val}]: ").strip()
+        if new_val and new_val != old_val:
+            _apply_field_edit(config, fields, idx, new_val)
+            _print_status(f"Updated {label} to: {new_val}")
+
+
+def _init_default_team(project_dir: Path) -> int:
+    """Auto-detect team configuration and confirm with user."""
+    print()
+    _print_status("Scanning project...")
+
+    # Auto-detect everything
+    detected = detect_project_stacks(project_dir)
+    config, fields = _build_auto_config(project_dir)
+
+    # Display summary
+    _display_summary(config, detected)
+    print()
+
+    # Prompt for missing required fields
+    if not config.worker_hostname:
+        config.worker_hostname = _prompt("Worker (Mac) hostname")
+        # Update in fields list too
+        for i, (label, key, _) in enumerate(fields):
+            if key == "worker_hostname":
+                fields[i] = (label, key, config.worker_hostname)
+                break
+
+    # Single confirmation
+    answer = input("  Look good? [Y/n/edit]: ").strip().lower()
+    if answer in ("n", "no"):
+        _print_status("Setup cancelled.")
+        return 0
+    if answer == "edit":
+        _edit_fields(config, fields)
 
     # Generate everything
     print()
@@ -846,12 +1359,12 @@ def _init_default_team(project_dir: Path) -> int:
     # Summary
     print()
     _print_status("Agent team initialized!")
-    _print_status(f"  Team size: {team_size}")
-    _print_status(f"  Project: {project_name}")
+    _print_status(f"  Team size: {config.team_size}")
+    _print_status(f"  Project: {config.project_name}")
     agent_names = ["PM", "Apple Engineer", "QA"]
-    if has_backend:
+    if config.has_agent("backend"):
         agent_names.append("Back End Engineer")
-    if has_frontend:
+    if config.has_agent("frontend"):
         agent_names.append("Front End Engineer")
     _print_status(f"  Agents: {', '.join(agent_names)}")
     print()
