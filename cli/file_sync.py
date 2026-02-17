@@ -226,7 +226,7 @@ class SyncClient:
         """Send file contents or deletion to daemon."""
         self._pending.pop(rel_path, None)
 
-        if self._ws is None or self._ws.closed:
+        if self._ws is None:
             return
 
         if deleted:
