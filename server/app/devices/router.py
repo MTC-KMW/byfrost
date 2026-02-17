@@ -93,18 +93,40 @@ async def register_device(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeviceRegisterResponse:
-    """Register a new device. Returns a device token (shown once)."""
+    """Register or re-register a device. Returns a device token (shown once).
+
+    If a device with the same (user, name, platform) already exists, its
+    token is rotated and the existing device is returned. This prevents
+    duplicate entries when a user runs ``byfrost login`` multiple times.
+    """
     raw_token = secrets.token_urlsafe(32)
     hashed_token = bcrypt.hashpw(raw_token.encode(), bcrypt.gensalt()).decode()
 
-    device = Device(
-        user_id=current_user.id,
-        name=body.name,
-        role=body.role,
-        platform=body.platform,
-        device_token=hashed_token,
+    # Check for existing device with same (user, name, platform)
+    result = await db.execute(
+        select(Device).where(
+            Device.user_id == current_user.id,
+            Device.name == body.name,
+            Device.platform == body.platform,
+        )
     )
-    db.add(device)
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        # Re-register: rotate token, update role
+        existing.device_token = hashed_token
+        existing.role = body.role
+        device = existing
+    else:
+        device = Device(
+            user_id=current_user.id,
+            name=body.name,
+            role=body.role,
+            platform=body.platform,
+            device_token=hashed_token,
+        )
+        db.add(device)
+
     await db.commit()
     await db.refresh(device)
 

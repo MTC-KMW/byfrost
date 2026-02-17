@@ -152,7 +152,7 @@ def process_conditionals(content: str, active_agents: set[str]) -> str:
         return body.strip("\n") if tag in active_agents else ""
 
     content = re.sub(
-        r"\[IF:(\w+)\]\n?(.*?)\[/IF:\1\]",
+        r"\[IF:(\w+)\]\n?(.*?)\[/IF:\1\]\n?",
         replace_if,
         content,
         flags=re.DOTALL,
@@ -164,7 +164,7 @@ def process_conditionals(content: str, active_agents: set[str]) -> str:
         return body.strip("\n") if tag not in active_agents else ""
 
     content = re.sub(
-        r"\[IFNOT:(\w+)\]\n?(.*?)\[/IFNOT:\1\]",
+        r"\[IFNOT:(\w+)\]\n?(.*?)\[/IFNOT:\1\]\n?",
         replace_ifnot,
         content,
         flags=re.DOTALL,
@@ -1244,15 +1244,14 @@ def _build_auto_config(
     )
 
     # Build editable fields list: (label, config_path, value)
+    # Display apple_dir as "(project root)" when "." for clarity
+    apple_dir_display = "(project root)" if apple_dir == "." else apple_dir
+
     fields: list[tuple[str, str, str]] = [
         ("Project name", "project_name", project_name),
         ("Team size", "team_size", str(team_size)),
+        # -- Controller --
         ("Controller", "controller_hostname", controller_hostname),
-        ("Worker (Mac)", "worker_hostname", worker_hostname),
-        ("Apple dir", "apple.APPLE_DIR", apple_dir),
-        ("Xcode scheme", "apple.XCODE_SCHEME", xcode_scheme),
-        ("Frameworks", "apple.APPLE_FRAMEWORKS", frameworks),
-        ("Min deploy target", "apple.MIN_DEPLOY_TARGET", min_deploy),
     ]
     if has_backend:
         fields.extend([
@@ -1273,6 +1272,14 @@ def _build_auto_config(
             ("Frontend build cmd", "frontend.FRONTEND_BUILD_CMD", fd["FRONTEND_BUILD_CMD"]),
             ("Frontend test cmd", "frontend.FRONTEND_TEST_CMD", fd["FRONTEND_TEST_CMD"]),
         ])
+    # -- Worker (Mac) --
+    fields.extend([
+        ("Worker (Mac)", "worker_hostname", worker_hostname),
+        ("Apple dir", "apple.APPLE_DIR", apple_dir_display),
+        ("Xcode scheme", "apple.XCODE_SCHEME", xcode_scheme),
+        ("Frameworks", "apple.APPLE_FRAMEWORKS", frameworks),
+        ("Min deploy target", "apple.MIN_DEPLOY_TARGET", min_deploy),
+    ])
 
     return config, fields
 
@@ -1298,9 +1305,11 @@ def _apply_field_edit(
         role, setting = key.split(".", 1)
         agent = config.get_agent(role)
         if agent:
-            agent.settings[setting] = new_value
+            # Map display value back to config value
+            save_value = "." if new_value == "(project root)" else new_value
+            agent.settings[setting] = save_value
             if setting.endswith("_DIR"):
-                agent.directory = new_value
+                agent.directory = save_value
 
 
 def _display_summary(
@@ -1462,7 +1471,7 @@ def _init_default_team(project_dir: Path) -> int:
         _print_status("  Created: CLAUDE.md")
 
     config.save(project_dir)
-    _print_status(f"  Created: {TEAM_CONFIG_FILE}")
+    _print_status(f"  Created: {BYFROST_SUBDIR}/{TEAM_CONFIG_FILE}")
 
     # Summary
     print()

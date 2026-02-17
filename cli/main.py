@@ -661,26 +661,49 @@ async def _test_worker_connection(addresses: dict | None, port: int) -> str | No
 
     addr_port = addresses.get("port", port)
 
+    secret = SecretManager.load()
+
     for addr in candidates:
-        uri = f"wss://{addr}:{addr_port}"
-        try:
-            ws = await asyncio.wait_for(
-                websockets.connect(uri, ssl=ssl_ctx, open_timeout=5),
-                timeout=8,
-            )
-            # Send a ping
-            start = time.time()
-            msg = json.dumps({"type": "ping", "timestamp": time.time()})
-            await ws.send(msg)
-            raw = await asyncio.wait_for(ws.recv(), timeout=5)
-            latency = (time.time() - start) * 1000
-            data = json.loads(raw)
-            await ws.close()
-            if data.get("type") == "pong":
-                _print_status(f"Connection verified: {addr} ({latency:.0f}ms)")
-                return addr
-        except Exception:
-            continue
+        for scheme in ("wss", "ws"):
+            uri = f"{scheme}://{addr}:{addr_port}"
+            ctx = ssl_ctx if scheme == "wss" else None
+            try:
+                ws = await asyncio.wait_for(
+                    websockets.connect(uri, ssl=ctx, open_timeout=5),
+                    timeout=8,
+                )
+                # Send a signed ping
+                start = time.time()
+                msg_data: dict[str, Any] = {
+                    "type": "ping", "timestamp": time.time(),
+                }
+                if secret:
+                    signer = MessageSigner(secret)
+                    msg_data["hmac"] = signer.sign(msg_data)
+                await ws.send(json.dumps(msg_data))
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                latency = (time.time() - start) * 1000
+                data = json.loads(raw)
+                await ws.close()
+                if data.get("type") == "pong":
+                    _print_status(
+                        f"Connection verified: {addr} ({latency:.0f}ms)"
+                    )
+                    return addr
+                if data.get("type") == "error":
+                    msg = data.get("message", "")
+                    if "hmac" in msg.lower() or "auth" in msg.lower():
+                        _print_error(
+                            "Worker reachable but authentication failed. "
+                            "The daemon may be using a different HMAC secret."
+                        )
+                        _print_error(
+                            "Fix: restart the daemon so it fetches "
+                            "the paired credentials from the server."
+                        )
+                        return None
+            except Exception:
+                continue
 
     return None
 

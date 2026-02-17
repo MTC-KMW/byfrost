@@ -5,7 +5,7 @@ Add project-specific checks as they are discovered.
 
 ## Lens 1 - Apple Sync & Parity
 
-- [ ] Every file in `qa/mac-changes.md` inventory is present in `apple/`
+- [ ] Every file in `byfrost/qa/mac-changes.md` inventory is present in `apple/`
 - [ ] No unexpected files in the commit that were not in the stream
 - [ ] Git push completed successfully (no partial commits)
 
@@ -28,7 +28,7 @@ Add project-specific checks as they are discovered.
 
 ## Lens 4 - API Contract Compliance
 
-- [ ] Implementations match `shared/api-spec.yaml`
+- [ ] Implementations match `byfrost/shared/api-spec.yaml`
 - [ ] Request/response shapes correct
 - [ ] Status codes correct
 - [ ] Error response format consistent
@@ -58,7 +58,7 @@ Add project-specific checks as they are discovered.
 
 ## Lens 8 - Anti-Pattern Check
 
-- [ ] Code does not repeat any entry in `compound/anti-patterns.md`
+- [ ] Code does not repeat any entry in `byfrost/compound/anti-patterns.md`
 - [ ] Filtered by stack tags for stacks involved
 - [ ] New anti-pattern discovered? Flag for PM
 
