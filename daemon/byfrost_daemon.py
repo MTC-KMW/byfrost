@@ -70,7 +70,7 @@ def load_config():
         "claude_path": os.environ.get("CLAUDE_PATH", "claude"),
         "allowed_tools": os.environ.get("BRIDGE_ALLOWED_TOOLS",
                                          "Bash,Read,Write,Edit,MultiEdit"),
-        "auto_git": os.environ.get("BRIDGE_AUTO_GIT", "true").lower() in ("true", "1", "yes"),
+        "auto_git": os.environ.get("BRIDGE_AUTO_GIT", "false").lower() in ("true", "1", "yes"),
     }
 
     # Env file key mapping for daemon config
@@ -370,67 +370,12 @@ class SessionManager:
     def session_name(self, task_id):
         return f"byfrost-{task_id[:8]}"
 
-    def git_pull(self, project_path):
-        """Run git pull in the project directory. Returns (success, output)."""
-        try:
-            result = subprocess.run(
-                ["git", "-C", project_path, "pull", "--ff-only"],
-                capture_output=True, timeout=30
-            )
-            output = result.stdout.decode().strip()
-            if result.returncode != 0:
-                err = result.stderr.decode().strip()
-                self.log.warning(f"git pull failed: {err}")
-                return False, err
-            self.log.info(f"git pull: {output}")
-            return True, output
-        except subprocess.TimeoutExpired:
-            self.log.warning("git pull timed out (30s)")
-            return False, "timeout"
-        except Exception as e:
-            self.log.warning(f"git pull error: {e}")
-            return False, str(e)
-
-    def git_push(self, project_path):
-        """Run git push in the project directory. Returns (success, output)."""
-        try:
-            result = subprocess.run(
-                ["git", "-C", project_path, "push"],
-                capture_output=True, timeout=30
-            )
-            output = result.stdout.decode().strip()
-            if result.returncode != 0:
-                err = result.stderr.decode().strip()
-                self.log.warning(f"git push failed: {err}")
-                return False, err
-            self.log.info(f"git push: {output}")
-            return True, output
-        except subprocess.TimeoutExpired:
-            self.log.warning("git push timed out (30s)")
-            return False, "timeout"
-        except Exception as e:
-            self.log.warning(f"git push error: {e}")
-            return False, str(e)
-
     def create_session(self, task):
-        """Spawn Claude Code in a new tmux session.
-
-        If BRIDGE_AUTO_GIT is enabled, runs git pull before spawning so the
-        agent always sees the latest task files and compound knowledge.
-        """
+        """Spawn Claude Code in a new tmux session."""
         name = self.session_name(task.id)
         project = task.project_path or self.config["project_path"]
         claude = self.config["claude_path"]
         tools = task.allowed_tools or self.config["allowed_tools"]
-
-        # Auto-sync: auto git-pull before spawning
-        if self.config.get("auto_git", True):
-            success, output = self.git_pull(project)
-            if success:
-                self.log.info("Pre-task git pull succeeded")
-            else:
-                # Non-fatal: agent can still work with what's there
-                self.log.warning(f"Pre-task git pull failed: {output} (continuing)")
 
         # Build the claude command
         # Use -p (print mode) for autonomous execution
@@ -748,6 +693,8 @@ class ByfrostDaemon:
                     "session.attach": self._handle_attach,
                     "ping": self._handle_ping,
                     "project.info": self._handle_project_info,
+                    "project.bundle": self._handle_bundle,
+                    "project.verify": self._handle_verify,
                     "file.sync": self.file_sync.handle_file_sync,
                     "file.changed": self.file_sync.handle_file_sync,
                 }.get(msg_type)
@@ -995,6 +942,99 @@ class ByfrostDaemon:
             },
         })
 
+    async def _handle_bundle(self, ws, msg, source="unknown"):
+        """Handle git bundle transfer from controller."""
+        import base64
+        import hashlib
+        import tempfile
+
+        action = msg.get("action", "")
+        project = self.config.get("project_path", "")
+
+        if action == "start":
+            self._bundle_chunks: list[bytes] = []
+            self._bundle_total = msg.get("total_size", 0)
+            self.log.info(f"Receiving git bundle ({self._bundle_total} bytes)")
+            await self._send(ws, "project.bundle.ack", {"status": "ready"})
+
+        elif action == "chunk":
+            data = msg.get("data", "")
+            try:
+                chunk = base64.b64decode(data, validate=True)
+                self._bundle_chunks.append(chunk)
+            except Exception as e:
+                self.log.warning(f"Invalid bundle chunk: {e}")
+
+        elif action == "complete":
+            expected_checksum = msg.get("checksum", "")
+            bundle_data = b"".join(getattr(self, "_bundle_chunks", []))
+            actual_checksum = hashlib.sha256(bundle_data).hexdigest()
+
+            if actual_checksum != expected_checksum:
+                self.log.error("Bundle checksum mismatch")
+                await self._send(ws, "project.bundle.result", {
+                    "status": "error", "message": "Checksum mismatch",
+                })
+                return
+
+            # Write bundle to temp file and clone/fetch
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".bundle", delete=False) as f:
+                    f.write(bundle_data)
+                    bundle_path = f.name
+
+                project_path = Path(project)
+                if project_path.exists() and (project_path / ".git").exists():
+                    # Existing repo - fetch from bundle
+                    result = subprocess.run(
+                        ["git", "-C", str(project_path), "fetch", bundle_path],
+                        capture_output=True, timeout=120,
+                    )
+                else:
+                    # New project - clone from bundle
+                    project_path.parent.mkdir(parents=True, exist_ok=True)
+                    result = subprocess.run(
+                        ["git", "clone", bundle_path, str(project_path)],
+                        capture_output=True, timeout=120,
+                    )
+
+                os.unlink(bundle_path)
+
+                if result.returncode == 0:
+                    self.log.info("Git bundle applied successfully")
+                    await self._send(ws, "project.bundle.result", {
+                        "status": "ok",
+                    })
+                else:
+                    err = result.stderr.decode().strip()
+                    self.log.error(f"Git bundle failed: {err}")
+                    await self._send(ws, "project.bundle.result", {
+                        "status": "error", "message": err,
+                    })
+            except Exception as e:
+                self.log.error(f"Bundle processing error: {e}")
+                await self._send(ws, "project.bundle.result", {
+                    "status": "error", "message": str(e),
+                })
+            finally:
+                self._bundle_chunks = []
+
+    async def _handle_verify(self, ws, msg, source="unknown"):
+        """Generate and return file checksums for parity validation."""
+        from core.ignore import generate_checksums, load_ignore_spec
+
+        project = self.config.get("project_path", "")
+        if not project:
+            await self._send(ws, "error", {"message": "No project path configured"})
+            return
+
+        project_path = Path(project)
+        spec = load_ignore_spec(project_path)
+        checksums = generate_checksums(project_path, spec)
+        await self._send(ws, "project.verify.result", {
+            "checksums": checksums,
+        })
+
     # --- Task Execution ---
 
     async def _process_queue(self, ws=None):
@@ -1073,21 +1113,12 @@ class ByfrostDaemon:
                     exit_code = self.sessions.get_exit_code(task.id)
                     self.queue.complete(task, exit_code=exit_code or 0)
 
-                    # Auto-sync: auto git-push after task completion
-                    git_pushed = False
-                    if self.config.get("auto_git", True) and (exit_code or 0) == 0:
-                        project = task.project_path or self.config["project_path"]
-                        success, output = self.sessions.git_push(project)
-                        git_pushed = success
-                        if not success:
-                            self.log.warning(f"Post-task git push failed: {output}")
-
                     await self._broadcast("task.complete", {
                         "task_id": task.id,
                         "exit_code": exit_code or 0,
                         "duration": time.time() - start,
                         "output_lines": len(task.output_lines),
-                        "git_pushed": git_pushed,
+                        "files_changed": len(task.output_lines),
                     })
                     break
 

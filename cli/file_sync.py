@@ -1,8 +1,9 @@
 """Controller-side file sync over WebSocket.
 
 Maintains a persistent WebSocket connection to the Mac worker daemon,
-watches local byfrost/ coordination subdirectories for changes, and
-syncs bidirectionally. Runs as a standalone background process started
+watches local project files for changes, and syncs bidirectionally.
+Syncs ALL project files (not just coordination dirs) - the bridge is
+the sole transport. Runs as a standalone background process started
 with `byfrost sync start`.
 """
 
@@ -32,22 +33,14 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from core.config import BRIDGE_DIR, DEFAULT_PORT, source_env_file
+from core.ignore import MAX_FILE_SIZE, load_ignore_spec, should_ignore
 from core.security import MessageSigner, SecretManager, TLSManager
-
-# Coordination directories to sync (relative to byfrost/)
-SYNC_DIRS = ["tasks", "shared", "compound", "pm", "qa"]
-
-# Max file size for sync (256KB)
-MAX_FILE_SIZE = 256 * 1024
 
 # Debounce interval in milliseconds
 DEBOUNCE_MS = 100
 
 # Echo suppression TTL in seconds
 SUPPRESS_TTL = 0.5
-
-# Files to ignore during sync (OS metadata, editor temp files)
-_IGNORE_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 
 # Reconnect delay on connection loss
 RECONNECT_DELAY = 5
@@ -124,9 +117,9 @@ class SyncClient:
         self, project_dir: Path, config: dict, logger: logging.Logger,
     ) -> None:
         self.project_dir = project_dir
-        self.byfrost_dir = project_dir / "byfrost"
         self.config = config
         self.log = logger
+        self._ignore_spec = load_ignore_spec(self.project_dir)
         self._signer = MessageSigner(config["secret"]) if config.get("secret") else None
         self._use_tls = TLSManager.has_client_certs()
         self._ws: websockets.WebSocketClientProtocol | None = None  # type: ignore[name-defined]
@@ -189,19 +182,13 @@ class SyncClient:
     # --- Outbound: local file change -> send to daemon ---
 
     def _start_watcher(self) -> None:
-        """Start watchdog observer on byfrost/ coordination subdirs."""
-        self.byfrost_dir.mkdir(parents=True, exist_ok=True)
-        for d in SYNC_DIRS:
-            (self.byfrost_dir / d).mkdir(parents=True, exist_ok=True)
-
+        """Start watchdog observer on project directory."""
         self._observer = Observer()
         handler = _SyncEventHandler(self)
-        for d in SYNC_DIRS:
-            watch_path = self.byfrost_dir / d
-            self._observer.schedule(handler, str(watch_path), recursive=True)
+        self._observer.schedule(handler, str(self.project_dir), recursive=True)
         self._observer.daemon = True
         self._observer.start()
-        self.log.info(f"Watching: {self.byfrost_dir}")
+        self.log.info(f"Watching: {self.project_dir}")
 
     def on_local_change(self, abs_path: str, deleted: bool = False) -> None:
         """Called by watchdog handler. Schedules debounced sync send."""
@@ -238,7 +225,7 @@ class SyncClient:
             self.log.debug(f"Synced deletion: {rel_path}")
             return
 
-        abs_path = self.byfrost_dir / rel_path
+        abs_path = self.project_dir / rel_path
         if not abs_path.is_file():
             return
 
@@ -278,19 +265,19 @@ class SyncClient:
             self.log.warning(f"Rejected invalid sync path: {rel_path}")
             return
 
-        abs_path = self.byfrost_dir / rel_path
+        abs_path = self.project_dir / rel_path
 
-        # Symlink escape check: verify resolved path stays inside byfrost/
-        if not self._is_inside_byfrost(abs_path) and abs_path.exists():
-            self.log.warning(f"Rejected path escaping byfrost dir: {rel_path}")
+        # Symlink escape check: verify resolved path stays inside project
+        if not self._is_inside_project(abs_path) and abs_path.exists():
+            self.log.warning(f"Rejected path escaping project dir: {rel_path}")
             return
 
         deleted = msg.get("deleted", False)
 
         if deleted:
             if abs_path.exists() or abs_path.is_symlink():
-                if not self._is_inside_byfrost(abs_path):
-                    self.log.warning(f"Rejected deletion escaping byfrost dir: {rel_path}")
+                if not self._is_inside_project(abs_path):
+                    self.log.warning(f"Rejected deletion escaping project dir: {rel_path}")
                     return
                 self._suppress(rel_path)
                 abs_path.unlink()
@@ -329,9 +316,9 @@ class SyncClient:
 
         abs_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Verify parent dir is inside byfrost/ after mkdir (catches symlinked parents)
-        if not self._is_inside_byfrost(abs_path):
-            self.log.warning(f"Rejected path escaping byfrost dir after mkdir: {rel_path}")
+        # Verify parent dir is inside project after mkdir (catches symlinked parents)
+        if not self._is_inside_project(abs_path):
+            self.log.warning(f"Rejected path escaping project dir after mkdir: {rel_path}")
             return
 
         self._suppress(rel_path)
@@ -348,26 +335,27 @@ class SyncClient:
     # --- Initial sync ---
 
     async def _send_manifest(self) -> None:
-        """Send all local byfrost/ coordination files on connect."""
+        """Send all local project files on connect."""
         count = 0
-        for d in SYNC_DIRS:
-            dir_path = self.byfrost_dir / d
-            if not dir_path.exists():
+        for f in self.project_dir.rglob("*"):
+            if f.is_symlink() or not f.is_file():
                 continue
-            for f in dir_path.rglob("*"):
-                if f.is_symlink() or not f.is_file():
+            if not self._is_inside_project(f):
+                continue
+            try:
+                rel = str(f.relative_to(self.project_dir))
+            except ValueError:
+                continue
+            if should_ignore(rel, self._ignore_spec):
+                continue
+            try:
+                if f.stat().st_size > MAX_FILE_SIZE:
                     continue
-                if not self._is_inside_byfrost(f):
-                    continue
-                try:
-                    if f.stat().st_size > MAX_FILE_SIZE:
-                        continue
-                except OSError:
-                    continue
-                rel = str(f.relative_to(self.byfrost_dir))
-                await self._send_file(rel, deleted=False)
-                count += 1
-                await asyncio.sleep(0)
+            except OSError:
+                continue
+            await self._send_file(rel, deleted=False)
+            count += 1
+            await asyncio.sleep(0)
 
         self.log.info(f"Sent manifest: {count} files")
 
@@ -385,9 +373,9 @@ class SyncClient:
         self._suppressed[rel_path] = time.time() + SUPPRESS_TTL
 
     def _relative_path(self, abs_path: str) -> str | None:
-        """Convert absolute path to relative path under byfrost/."""
+        """Convert absolute path to relative path under project dir."""
         try:
-            rel = Path(abs_path).relative_to(self.byfrost_dir)
+            rel = Path(abs_path).relative_to(self.project_dir)
             rel_str = str(rel)
             if self._validate_path(rel_str):
                 return rel_str
@@ -396,7 +384,7 @@ class SyncClient:
         return None
 
     def _validate_path(self, rel_path: str) -> bool:
-        """Check that a relative path is in a sync directory and safe."""
+        """Check that a relative path is safe and not ignored."""
         if not rel_path:
             return False
         try:
@@ -408,17 +396,17 @@ class SyncClient:
             return False
         if str(p).startswith(("/", "\\")):
             return False
-        if not parts or parts[0] not in SYNC_DIRS:
+        if not parts:
             return False
-        if p.name in _IGNORE_FILES:
+        if should_ignore(rel_path, self._ignore_spec):
             return False
         return True
 
-    def _is_inside_byfrost(self, abs_path: Path) -> bool:
-        """Verify resolved path stays inside byfrost_dir (symlink check)."""
+    def _is_inside_project(self, abs_path: Path) -> bool:
+        """Verify resolved path stays inside project_dir (symlink check)."""
         try:
             resolved = abs_path.resolve()
-            resolved.relative_to(self.byfrost_dir.resolve())
+            resolved.relative_to(self.project_dir.resolve())
             return True
         except (ValueError, OSError):
             return False

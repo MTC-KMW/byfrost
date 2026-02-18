@@ -203,11 +203,11 @@ class ByfrostClient:
                 elif msg_type == "task.complete":
                     exit_code = data.get("exit_code", 0)
                     duration = data.get("duration", 0)
-                    git_pushed = data.get("git_pushed", False)
+                    files_changed = data.get("files_changed", 0)
                     print()
                     _print_status(f"Task complete (exit={exit_code}, {duration:.1f}s)")
-                    if git_pushed:
-                        _print_status("Auto git-push: changes pushed to remote")
+                    if files_changed:
+                        _print_status(f"Files changed: {files_changed} (synced via bridge)")
                     return exit_code
 
                 elif msg_type == "task.error":
@@ -378,6 +378,76 @@ class ByfrostClient:
                 _print_error(data.get("message", "Follow-up failed"))
         except asyncio.TimeoutError:
             _print_error("Timeout sending follow-up")
+        finally:
+            await ws.close()
+
+    async def verify_parity(self, project_dir):
+        """Verify file parity between controller and worker."""
+        from core.ignore import generate_checksums, load_ignore_spec
+
+        _print_status("Requesting worker checksums...")
+        ws = await self._connect()
+        msg = self._sign({"type": "project.verify"})
+        await ws.send(json.dumps(msg))
+
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=60)
+            data = json.loads(raw)
+
+            if data.get("type") == "error":
+                _print_error(data.get("message", "Verification failed"))
+                return
+            if data.get("type") != "project.verify.result":
+                _print_error(f"Unexpected response: {data.get('type')}")
+                return
+
+            remote = data.get("checksums", {})
+            _print_status(f"Worker: {len(remote)} files")
+
+            _print_status("Computing local checksums...")
+            spec = load_ignore_spec(project_dir)
+            local = generate_checksums(project_dir, spec)
+            _print_status(f"Local: {len(local)} files")
+
+            # Compare
+            all_paths = sorted(set(local) | set(remote))
+            missing_local = []
+            missing_remote = []
+            mismatched = []
+            matched = 0
+
+            for p in all_paths:
+                if p not in local:
+                    missing_local.append(p)
+                elif p not in remote:
+                    missing_remote.append(p)
+                elif local[p] != remote[p]:
+                    mismatched.append(p)
+                else:
+                    matched += 1
+
+            if not missing_local and not missing_remote and not mismatched:
+                _print_status(f"Parity OK - {matched} files match")
+            else:
+                if mismatched:
+                    _print_error(f"Content differs ({len(mismatched)} files):")
+                    for p in mismatched[:20]:
+                        print(f"  {p}")
+                if missing_local:
+                    _print_error(f"Only on worker ({len(missing_local)} files):")
+                    for p in missing_local[:20]:
+                        print(f"  {p}")
+                if missing_remote:
+                    _print_error(f"Only on controller ({len(missing_remote)} files):")
+                    for p in missing_remote[:20]:
+                        print(f"  {p}")
+                _print_status(
+                    f"Matched: {matched}, Mismatched: {len(mismatched)}, "
+                    f"Only local: {len(missing_remote)}, "
+                    f"Only remote: {len(missing_local)}"
+                )
+        except asyncio.TimeoutError:
+            _print_error("Verification timeout (60s)")
         finally:
             await ws.close()
 
@@ -1141,11 +1211,14 @@ def main():
     )
 
     # byfrost sync
-    p_sync = sub.add_parser("sync", help="File sync for coordination directories")
+    p_sync = sub.add_parser("sync", help="Project file sync over bridge")
     p_sync.add_argument(
         "action", choices=["start", "stop", "status"],
         help="Sync action",
     )
+
+    # byfrost verify
+    sub.add_parser("verify", help="Verify file parity between controller and worker")
 
     # byfrost send
     p_send = sub.add_parser("send", help="Send a task to the Mac agent")
@@ -1221,7 +1294,7 @@ def main():
 
     # All remaining commands need daemon config + WebSocket
     # Refresh worker addresses from the server before connecting
-    if args.command in ("ping", "send", "status", "cancel", "attach", "followup"):
+    if args.command in ("ping", "send", "status", "cancel", "attach", "followup", "verify"):
         try:
             asyncio.run(_refresh_worker_addresses())
         except Exception:
@@ -1255,6 +1328,9 @@ def main():
 
     elif args.command == "followup":
         asyncio.run(client.send_followup(args.task_id, args.text))
+
+    elif args.command == "verify":
+        asyncio.run(client.verify_parity(Path.cwd()))
 
     elif args.command == "logs":
         # View remote logs via SSH

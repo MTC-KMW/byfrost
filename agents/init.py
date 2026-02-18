@@ -967,6 +967,137 @@ def _merge_into_existing_claude_md(existing: str, team_content: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Git Bundle Transfer
+# ---------------------------------------------------------------------------
+
+
+def _send_git_bundle(project_dir: Path) -> bool:
+    """Create and send a git bundle to the worker over the bridge.
+
+    Returns True on success, False on failure (non-fatal).
+    """
+    import asyncio
+    import base64
+    import hashlib
+    import tempfile
+
+    # Check if this is a git repo
+    if not (project_dir / ".git").exists():
+        _print_status("  No .git directory - skipping bundle transfer")
+        return False
+
+    _print_status("Creating git bundle...")
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".bundle", delete=False) as f:
+            bundle_path = f.name
+
+        result = subprocess.run(
+            ["git", "-C", str(project_dir), "bundle", "create", bundle_path, "--all"],
+            capture_output=True, timeout=120,
+        )
+        if result.returncode != 0:
+            err = result.stderr.decode().strip()
+            _print_error(f"  git bundle create failed: {err}")
+            return False
+
+        bundle_data = Path(bundle_path).read_bytes()
+        Path(bundle_path).unlink(missing_ok=True)
+        bundle_size = len(bundle_data)
+        checksum = hashlib.sha256(bundle_data).hexdigest()
+        _print_status(f"  Bundle: {bundle_size / 1024:.0f}KB")
+    except Exception as e:
+        _print_error(f"  Bundle creation failed: {e}")
+        return False
+
+    # Send over WebSocket
+    _print_status("Sending bundle to worker...")
+
+    async def _transfer() -> bool:
+        import websockets
+
+        from cli.main import load_config
+        from core.security import MessageSigner, TLSManager
+
+        config = load_config()
+        host = config["host"]
+        port = config["port"]
+        secret = config["secret"]
+        signer = MessageSigner(secret) if secret else None
+
+        use_tls = TLSManager.has_client_certs()
+        protocol = "wss" if use_tls else "ws"
+        uri = f"{protocol}://{host}:{port}"
+
+        ssl_ctx = None
+        if use_tls:
+            try:
+                ssl_ctx = TLSManager.get_client_ssl_context()
+            except Exception:
+                uri = f"ws://{host}:{port}"
+
+        def sign(msg: dict) -> dict:
+            if signer:
+                return signer.sign(msg)
+            import time as _t
+            msg["timestamp"] = _t.time()
+            return msg
+
+        async with websockets.connect(
+            uri, ssl=ssl_ctx, open_timeout=10, close_timeout=5,
+            max_size=2**22,  # 4MB per message
+        ) as ws:
+            # Start
+            await ws.send(json.dumps(sign({
+                "type": "project.bundle",
+                "action": "start",
+                "total_size": bundle_size,
+            })))
+
+            raw = await asyncio.wait_for(ws.recv(), timeout=10)
+            resp = json.loads(raw)
+            if resp.get("type") != "project.bundle.ack":
+                _print_error(f"  Unexpected response: {resp.get('type')}")
+                return False
+
+            # Send chunks (256KB each)
+            chunk_size = 256 * 1024
+            offset = 0
+            while offset < bundle_size:
+                chunk = bundle_data[offset:offset + chunk_size]
+                await ws.send(json.dumps(sign({
+                    "type": "project.bundle",
+                    "action": "chunk",
+                    "data": base64.b64encode(chunk).decode("ascii"),
+                    "offset": offset,
+                })))
+                offset += len(chunk)
+
+            # Complete
+            await ws.send(json.dumps(sign({
+                "type": "project.bundle",
+                "action": "complete",
+                "checksum": checksum,
+            })))
+
+            raw = await asyncio.wait_for(ws.recv(), timeout=120)
+            resp = json.loads(raw)
+            if resp.get("type") == "project.bundle.result" and resp.get("status") == "ok":
+                return True
+            _print_error(f"  Bundle transfer failed: {resp.get('message', 'unknown')}")
+            return False
+
+    try:
+        success = asyncio.run(_transfer())
+        if success:
+            _print_status("  Git bundle transferred successfully")
+        return success
+    except Exception as e:
+        _print_error(f"  Bundle transfer failed: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Wizard
 # ---------------------------------------------------------------------------
 
@@ -1520,6 +1651,13 @@ def _init_default_team(project_dir: Path) -> int:
 
     config.save(project_dir)
     _print_status(f"  Created: {BYFROST_SUBDIR}/{TEAM_CONFIG_FILE}")
+
+    # Transfer git bundle to worker
+    print()
+    _print_status("Transferring codebase to worker...")
+    bundle_ok = _send_git_bundle(project_dir)
+    if not bundle_ok:
+        _print_status("  Bundle transfer skipped - worker will receive files via sync")
 
     # Summary
     print()
