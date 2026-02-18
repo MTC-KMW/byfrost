@@ -151,31 +151,41 @@ class TeamConfig:
 
 
 def process_conditionals(content: str, active_agents: set[str]) -> str:
-    """Process [IF:X]...[/IF:X] and [IFNOT:X]...[/IFNOT:X] blocks."""
+    """Process [IF:X]...[/IF:X] and [IFNOT:X]...[/IFNOT:X] blocks.
 
-    def replace_if(match: re.Match[str]) -> str:
-        tag = match.group(1)
-        body = match.group(2)
-        return body.strip("\n") if tag in active_agents else ""
+    Included bodies are stripped of leading/trailing blank lines but keep
+    a trailing newline so they don't concatenate with subsequent content.
+    Excluded blocks collapse to empty string. Runs iteratively to handle
+    nested conditionals (e.g. [IF:BACKEND] inside [IF:UI_MODE]).
+    """
 
-    content = re.sub(
-        r"\[IF:(\w+)\]\n?(.*?)\[/IF:\1\]\n?",
-        replace_if,
-        content,
-        flags=re.DOTALL,
-    )
+    def _include_body(body: str) -> str:
+        stripped = body.strip("\n")
+        return stripped + "\n" if stripped else ""
 
-    def replace_ifnot(match: re.Match[str]) -> str:
-        tag = match.group(1)
-        body = match.group(2)
-        return body.strip("\n") if tag not in active_agents else ""
+    if_pat = re.compile(r"\[IF:(\w+)\]\n?(.*?)\[/IF:\1\]\n?", re.DOTALL)
+    ifnot_pat = re.compile(r"\[IFNOT:(\w+)\]\n?(.*?)\[/IFNOT:\1\]\n?", re.DOTALL)
 
-    content = re.sub(
-        r"\[IFNOT:(\w+)\]\n?(.*?)\[/IFNOT:\1\]\n?",
-        replace_ifnot,
-        content,
-        flags=re.DOTALL,
-    )
+    # Iterate until no more conditional tags remain (handles nesting)
+    for _ in range(10):  # safety limit
+        prev = content
+
+        def replace_if(match: re.Match[str]) -> str:
+            tag = match.group(1)
+            body = match.group(2)
+            return _include_body(body) if tag in active_agents else ""
+
+        content = if_pat.sub(replace_if, content)
+
+        def replace_ifnot(match: re.Match[str]) -> str:
+            tag = match.group(1)
+            body = match.group(2)
+            return _include_body(body) if tag not in active_agents else ""
+
+        content = ifnot_pat.sub(replace_ifnot, content)
+
+        if content == prev:
+            break
 
     return content
 
