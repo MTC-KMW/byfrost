@@ -88,6 +88,7 @@ class TeamConfig:
     team_size: int
     agents: list[AgentConfig] = field(default_factory=list)
     created_at: str = ""
+    mode: str = "normal"  # "normal" or "ui"
 
     def save(self, project_dir: Path) -> None:
         """Write config to byfrost/.byfrost-team.json."""
@@ -105,6 +106,7 @@ class TeamConfig:
         try:
             data = json.loads(path.read_text())
             agents = [AgentConfig(**a) for a in data.pop("agents", [])]
+            data.setdefault("mode", "normal")
             return cls(**data, agents=agents)
         except (json.JSONDecodeError, TypeError, KeyError):
             return None
@@ -138,6 +140,8 @@ class TeamConfig:
         for agent in self.agents:
             if agent.enabled and agent.role in ("backend", "frontend"):
                 tags.add(agent.role.upper())
+        if self.mode == "ui":
+            tags.add("UI_MODE")
         return tags
 
 
@@ -785,10 +789,25 @@ def generate_root_claude_md(config: TeamConfig) -> str:
     lines.append("## Team\n")
     lines.append("| Agent | Machine | Role |")
     lines.append("|-------|---------|------|")
-    lines.append(f"| PM (you) | {config.controller_hostname} | Plans, routes, compounds |")
-    lines.append(
-        f"| Apple Engineer | {config.worker_hostname} | Apple platform work |"
-    )
+    ui = config.mode == "ui"
+    if ui:
+        lines.append(
+            f"| Apple Engineer (you) | {config.worker_hostname}"
+            f" | Developer's conversation, UI work |"
+        )
+        lines.append(
+            f"| PM | {config.controller_hostname}"
+            f" | Receives backend task dispatches |"
+        )
+    else:
+        lines.append(
+            f"| PM (you) | {config.controller_hostname}"
+            f" | Plans, routes, compounds |"
+        )
+        lines.append(
+            f"| Apple Engineer | {config.worker_hostname}"
+            f" | Apple platform work |"
+        )
     lines.append(
         f"| QA Engineer | {config.controller_hostname} | Stream monitoring + 8-lens review |"
     )
@@ -805,31 +824,71 @@ def generate_root_claude_md(config: TeamConfig) -> str:
     # Communication
     lines.append("<!-- byfrost:communication -->")
     lines.append("## Communication\n")
-    lines.append("- **User to PM**: Claude Code conversation (direct)")
-    lines.append(
-        "- **PM to Apple Engineer**: task spec via `byfrost/tasks/apple/current.md` "
-        "(bridge-synced) + bridge trigger (`byfrost send`)"
-    )
-    lines.append(
-        "- **Apple Engineer to PM**: streamed terminal output + `task.complete` over bridge"
-    )
-    lines.append(
-        "- **QA**: monitors Apple stream, writes `byfrost/qa/mac-changes.md` "
-        "and `byfrost/qa/review-report.md`"
-    )
-    if config.has_agent("backend") or config.has_agent("frontend"):
+    if ui:
         lines.append(
-            "- **PM to Backend/Frontend**: Claude Agent Teams messaging (controller, local)"
+            "- **User to Apple Engineer**: direct conversation on Mac"
         )
+        lines.append(
+            "- **Apple Engineer to PM**: backend task specs via "
+            "`byfrost/tasks/backend/current.md` (bridge-synced)"
+        )
+        lines.append(
+            "- **QA**: monitors Apple stream, detects backend tasks, "
+            "spawns PM via Agent Teams"
+        )
+        if config.has_agent("backend"):
+            lines.append(
+                "- **PM to Backend**: Claude Agent Teams messaging (dispatch)"
+            )
+    else:
+        lines.append("- **User to PM**: Claude Code conversation (direct)")
+        lines.append(
+            "- **PM to Apple Engineer**: task spec via `byfrost/tasks/apple/current.md` "
+            "(bridge-synced) + bridge trigger (`byfrost send`)"
+        )
+        lines.append(
+            "- **Apple Engineer to PM**: streamed terminal output + `task.complete` over bridge"
+        )
+        lines.append(
+            "- **QA**: monitors Apple stream, writes `byfrost/qa/mac-changes.md` "
+            "and `byfrost/qa/review-report.md`"
+        )
+        if config.has_agent("backend") or config.has_agent("frontend"):
+            lines.append(
+                "- **PM to Backend/Frontend**: Claude Agent Teams messaging (controller, local)"
+            )
     lines.append("<!-- /byfrost:communication -->\n")
 
     # Cycle
     lines.append("<!-- byfrost:cycle -->")
     lines.append("## Compound Engineering Cycle\n")
-    lines.append("1. **Plan** - PM reads compound knowledge, writes task specs, dispatches")
-    lines.append("2. **Work** - All agents implement. QA monitors Apple stream.")
-    lines.append("3. **Review** - QA runs 8-lens review across all stacks.")
-    lines.append("4. **Compound** - PM extracts learnings, promotes patterns.")
+    if ui:
+        lines.append(
+            "1. **Work** - Developer works with Apple Engineer on Mac"
+        )
+        lines.append(
+            "2. **Dispatch** - Apple Engineer writes backend task spec, "
+            "QA detects, PM dispatches"
+        )
+        lines.append(
+            "3. **Review** - QA runs 8-lens review after UI session"
+        )
+        lines.append(
+            "4. **Compound** - PM extracts learnings, promotes patterns"
+        )
+    else:
+        lines.append(
+            "1. **Plan** - PM reads compound knowledge, writes task specs, dispatches"
+        )
+        lines.append(
+            "2. **Work** - All agents implement. QA monitors Apple stream."
+        )
+        lines.append(
+            "3. **Review** - QA runs 8-lens review across all stacks."
+        )
+        lines.append(
+            "4. **Compound** - PM extracts learnings, promotes patterns."
+        )
     lines.append("<!-- /byfrost:cycle -->\n")
 
     # Directory structure
@@ -846,7 +905,7 @@ def generate_root_claude_md(config: TeamConfig) -> str:
     lines.append("    review-checklist.md Standard review checks")
     lines.append("  tasks/             Task specs per agent")
     lines.append("    apple/current.md Apple Engineer's current task")
-    if config.has_agent("backend"):
+    if config.has_agent("backend") or ui:
         lines.append("    backend/current.md Back End task")
     if config.has_agent("frontend"):
         lines.append("    web/current.md   Front End task")

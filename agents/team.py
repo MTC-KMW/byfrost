@@ -4,7 +4,7 @@ Add, remove, or show status of agents in an existing team setup.
 Only backend and frontend agents can be added/removed. PM, Apple
 Engineer, and QA are permanent.
 
-Usage: byfrost team status|add|remove [backend|frontend]
+Usage: byfrost team status|add|remove|mode [backend|frontend|normal|ui]
 """
 
 from pathlib import Path
@@ -46,7 +46,8 @@ def team_status(project_dir: Path) -> int:
         _print_error("No team config found. Run 'byfrost init' first.")
         return 1
 
-    _print_status(f"Team: {config.project_name} ({config.team_size} agents)")
+    mode_label = "UI mode" if config.mode == "ui" else "Normal mode"
+    _print_status(f"Team: {config.project_name} ({config.team_size} agents) - {mode_label}")
     print()
 
     # Header
@@ -57,11 +58,17 @@ def team_status(project_dir: Path) -> int:
     print(f"  {'PM':<22} {config.controller_hostname:<24} Plans, routes, compounds")
 
     # Apple (always)
-    apple = config.get_agent("apple")
-    apple_info = ""
-    if apple:
-        apple_info = apple.settings.get("APPLE_FRAMEWORKS", "Apple platform work")
-    print(f"  {'Apple Engineer':<22} {config.worker_hostname:<24} {apple_info}")
+    if config.mode == "ui":
+        print(
+            f"  {'Apple Engineer (you)':<22} {config.worker_hostname:<24}"
+            f" Developer's conversation"
+        )
+    else:
+        apple = config.get_agent("apple")
+        apple_info = ""
+        if apple:
+            apple_info = apple.settings.get("APPLE_FRAMEWORKS", "Apple platform work")
+        print(f"  {'Apple Engineer':<22} {config.worker_hostname:<24} {apple_info}")
 
     # QA (always)
     print(f"  {'QA Engineer':<22} {config.controller_hostname:<24} Stream monitoring + review")
@@ -84,6 +91,91 @@ def team_status(project_dir: Path) -> int:
 
     print()
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Mode
+# ---------------------------------------------------------------------------
+
+
+def team_mode(project_dir: Path, mode: str | None) -> int:
+    """Switch operating mode or show current mode. Returns 0 on success, 1 on failure."""
+    config = TeamConfig.load(project_dir)
+    if config is None:
+        _print_error("No team config found. Run 'byfrost init' first.")
+        return 1
+
+    if mode is None:
+        label = "UI" if config.mode == "ui" else "Normal"
+        _print_status(f"Mode: {label}")
+        return 0
+
+    if mode not in ("normal", "ui"):
+        _print_error(f"Unknown mode '{mode}'. Use 'normal' or 'ui'.")
+        return 1
+
+    if config.mode == mode:
+        _print_status(f"Already in {mode} mode.")
+        return 0
+
+    config.mode = mode
+    _regen_for_mode_switch(project_dir, config)
+    config.save(project_dir)
+    _print_mode_instructions(config)
+    return 0
+
+
+def _regen_for_mode_switch(project_dir: Path, config: TeamConfig) -> None:
+    """Regenerate all agent CLAUDE.md files for a mode switch.
+
+    Mode affects content throughout all templates, so we do full rewrites
+    for agents without markers (apple, qa) and for PM (mode changes all
+    sections). Root CLAUDE.md uses partial regen via markers.
+    """
+    bf_dir = project_dir / BYFROST_SUBDIR
+    values = config.get_placeholder_values()
+    active_tags = config.get_active_agent_tags()
+
+    # Full rewrite: apple, qa, pm
+    for role, subdir in [("apple-engineer", "apple"), ("qa-engineer", "qa"), ("pm", "pm")]:
+        template_path = ROLES_DIR / f"{role}.md"
+        out_path = bf_dir / subdir / "CLAUDE.md"
+        if template_path.exists() and out_path.exists():
+            content = process_template(template_path.read_text(), values, active_tags)
+            out_path.write_text(content)
+            _print_status(f"  Updated: {BYFROST_SUBDIR}/{subdir}/CLAUDE.md")
+
+    # Partial regen: root CLAUDE.md (marker sections only)
+    _partial_regen_root(project_dir, config)
+
+    # Ensure backend task directory exists in UI mode
+    if config.mode == "ui":
+        task_dir = bf_dir / "tasks" / "backend"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        stub = task_dir / "current.md"
+        if not stub.exists():
+            stub.write_text(
+                "# Current Task\n\n"
+                "_No backend task. Apple Engineer will write specs here._\n"
+            )
+
+
+def _print_mode_instructions(config: TeamConfig) -> None:
+    """Print mode-specific instructions after switching."""
+    print()
+    if config.mode == "ui":
+        _print_status("Switched to UI mode.")
+        print()
+        print("  Next steps:")
+        print("  1. Go to your Mac and start a Claude Code session with the Apple Engineer")
+        print("  2. Start QA on the controller: open a new terminal and run Claude Code")
+        print("     in the byfrost/qa/ directory - QA will monitor the stream")
+        print("  3. When done, switch back: byfrost team mode normal")
+    else:
+        _print_status("Switched to Normal mode.")
+        print()
+        print("  PM is your conversation on the controller.")
+        print("  Use 'byfrost send' to dispatch tasks to the Apple Engineer.")
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +399,8 @@ def run_team_command(action: str, agent: str | None, project_dir: Path) -> int:
     try:
         if action == "status":
             return team_status(project_dir)
+        if action == "mode":
+            return team_mode(project_dir, agent)
         if action == "add":
             if not agent:
                 _print_error("Usage: byfrost team add <backend|frontend>")

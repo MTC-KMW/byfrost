@@ -1133,10 +1133,11 @@ def main():
     # byfrost team
     p_team = sub.add_parser("team", help="Manage agent team")
     p_team.add_argument(
-        "action", choices=["status", "add", "remove"], help="Team action",
+        "action", choices=["status", "add", "remove", "mode"], help="Team action",
     )
     p_team.add_argument(
-        "agent", nargs="?", help="Agent to add/remove (backend or frontend)",
+        "agent", nargs="?",
+        help="Agent (backend/frontend) or mode (normal/ui)",
     )
 
     # byfrost sync
