@@ -79,9 +79,21 @@ class TestPromptSanitizer:
         is_safe, reason = PromptSanitizer.validate("$(cat /etc/passwd)")
         assert not is_safe
 
-    def test_shell_injection_pipe(self):
-        is_safe, reason = PromptSanitizer.validate("hello | rm")
+    def test_shell_injection_variable_expansion(self):
+        is_safe, reason = PromptSanitizer.validate("echo ${HOME}")
         assert not is_safe
+
+    def test_allows_pipes_and_chaining(self):
+        """Pipes, &&, ||, ; are allowed - shlex.quote() handles shell safety."""
+        for prompt in [
+            "hello | rm",
+            "cd mac-app && xcodebuild build",
+            "run tests; if failing fix them",
+            "try this || try that",
+            "write output > /tmp/out.txt",
+        ]:
+            is_safe, reason = PromptSanitizer.validate(prompt)
+            assert is_safe, f"Prompt should be allowed: {prompt!r} (got: {reason})"
 
     def test_too_long(self):
         is_safe, reason = PromptSanitizer.validate("x" * 20000)

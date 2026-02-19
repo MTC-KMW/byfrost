@@ -356,17 +356,16 @@ class MessageSigner:
 # 3. Prompt Sanitization
 # ---------------------------------------------------------------------------
 
-# Characters that are never allowed in prompts
+# Patterns that indicate shell exploitation attempts.
+# Note: shlex.quote() is the primary defense (wraps prompt in single quotes).
+# These patterns are a secondary layer catching clear injection intent.
+# We intentionally allow &&, ||, ;, |, and redirects because:
+#   1. Prompts go to `claude -p` (natural language), not a raw shell
+#   2. shlex.quote() makes them literal text in the shell command
+#   3. Users legitimately write "cd dir && build" in prompts
 FORBIDDEN_PATTERNS = [
     r'\$\(',          # Command substitution $(...)
     r'`[^`]+`',       # Backtick command substitution
-    r'\|\s*\w',       # Pipe to another command
-    r';\s*\w',        # Command chaining with semicolon
-    r'&&\s*\w',       # Command chaining with &&
-    r'\|\|\s*\w',     # Command chaining with ||
-    r'>\s*/',         # Redirect to absolute path
-    r'>>\s*/',        # Append to absolute path
-    r'<\s*/',         # Read from absolute path
     r'\$\{',          # Variable expansion ${...}
     r'\\x[0-9a-fA-F]',  # Hex escapes
     r'\\u[0-9a-fA-F]',  # Unicode escapes
