@@ -35,6 +35,14 @@ struct DaemonConfig: Codable, Equatable {
         bridgeDir.appendingPathComponent("logs")
     }()
 
+    static let authFile: URL = {
+        bridgeDir.appendingPathComponent("auth.json")
+    }()
+
+    static let stateFile: URL = {
+        bridgeDir.appendingPathComponent("state.json")
+    }()
+
     init(projectPath: String = "", port: Int = DaemonConfig.defaultPort) {
         self.projectPath = projectPath
         self.port = port

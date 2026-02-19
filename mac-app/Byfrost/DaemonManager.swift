@@ -2,6 +2,56 @@ import AppKit
 import Combine
 import Foundation
 
+// MARK: - Daemon Rich State (from state.json)
+
+/// Rich daemon state from ~/.byfrost/state.json.
+///
+/// Written atomically by the Python daemon on lifecycle events.
+/// Schema matches daemon/byfrost_daemon.py `_write_state()`.
+struct DaemonRichState: Codable {
+    let pid: Int?
+    let startedAt: Double?
+    let state: String?
+    let projectPath: String?
+    let clients: Int?
+    let activeTask: ActiveTaskInfo?
+    let queueSize: Int?
+    let lastError: String?
+    let python: String?
+    let version: String?
+    let updatedAt: Double?
+
+    struct ActiveTaskInfo: Codable {
+        let id: String
+        let promptPreview: String?
+        let startedAt: Double?
+        let status: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case promptPreview = "prompt_preview"
+            case startedAt = "started_at"
+            case status
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case pid
+        case startedAt = "started_at"
+        case state
+        case projectPath = "project_path"
+        case clients
+        case activeTask = "active_task"
+        case queueSize = "queue_size"
+        case lastError = "last_error"
+        case python
+        case version
+        case updatedAt = "updated_at"
+    }
+}
+
+// MARK: - Daemon Manager
+
 /// Manages the Python byfrost daemon lifecycle.
 ///
 /// Matches paths and formats from core/config.py and cli/daemon_mgr.py.
@@ -15,6 +65,16 @@ final class DaemonManager: ObservableObject {
     @Published var state: DaemonState = .stopped
     @Published var pid: pid_t?
     @Published var config: DaemonConfig
+
+    // Rich state from state.json (updated every health check)
+    @Published var richState: DaemonRichState?
+    @Published var clientCount: Int = 0
+    @Published var activeTaskPreview: String?
+    @Published var activeTaskRuntime: TimeInterval?
+    @Published var queueSize: Int = 0
+    @Published var uptime: TimeInterval?
+    @Published var lastError: String?
+    @Published var daemonVersion: String?
 
     // MARK: - Constants (must match cli/daemon_mgr.py)
 
@@ -223,7 +283,7 @@ final class DaemonManager: ObservableObject {
     private func checkHealth() {
         if let currentPID = pid {
             if isProcessAlive(currentPID) {
-                // Still running - keep current state (running/taskActive/disconnected)
+                // Still running - state.json reconciliation handles state
                 if state == .error || state == .stopped {
                     state = .running
                 }
@@ -240,6 +300,71 @@ final class DaemonManager: ObservableObject {
         } else if state == .stopped {
             // Check if CLI started the daemon behind our back
             recoverPID()
+        }
+
+        // Poll state.json for rich state info
+        loadStateFile()
+    }
+
+    /// Read ~/.byfrost/state.json and update published properties.
+    private func loadStateFile() {
+        let path = DaemonConfig.stateFile.path
+        guard FileManager.default.fileExists(atPath: path) else {
+            richState = nil
+            return
+        }
+        do {
+            let data = try Data(contentsOf: DaemonConfig.stateFile)
+            let decoded = try JSONDecoder().decode(
+                DaemonRichState.self, from: data
+            )
+            richState = decoded
+
+            // Derive convenience properties
+            clientCount = decoded.clients ?? 0
+            queueSize = decoded.queueSize ?? 0
+            lastError = decoded.lastError
+            daemonVersion = decoded.version
+
+            if let taskInfo = decoded.activeTask {
+                activeTaskPreview = taskInfo.promptPreview
+                if let taskStart = taskInfo.startedAt {
+                    activeTaskRuntime = Date().timeIntervalSince1970 - taskStart
+                } else {
+                    activeTaskRuntime = nil
+                }
+            } else {
+                activeTaskPreview = nil
+                activeTaskRuntime = nil
+            }
+
+            if let startedAt = decoded.startedAt {
+                uptime = Date().timeIntervalSince1970 - startedAt
+            } else {
+                uptime = nil
+            }
+
+            // Reconcile DaemonState with state.json when daemon is alive
+            if pid != nil, let stateStr = decoded.state {
+                switch stateStr {
+                case "running":
+                    if decoded.activeTask != nil {
+                        state = .taskActive
+                    } else if clientCount == 0 {
+                        state = .disconnected
+                    } else {
+                        state = .running
+                    }
+                case "starting", "restarting":
+                    state = .running
+                case "stopped":
+                    break // Let PID-based check handle this
+                default:
+                    break
+                }
+            }
+        } catch {
+            richState = nil
         }
     }
 

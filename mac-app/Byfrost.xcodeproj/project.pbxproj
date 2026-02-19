@@ -15,6 +15,8 @@
 		A10006 /* DaemonConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10006 /* DaemonConfig.swift */; };
 		A10007 /* DaemonState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10007 /* DaemonState.swift */; };
 		A10008 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10008 /* Assets.xcassets */; };
+		A10009 /* CLIRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10011 /* CLIRunner.swift */; };
+		A10010 /* SetupWizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10012 /* SetupWizardView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +30,8 @@
 		B10008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B10009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10010 /* Byfrost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Byfrost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10011 /* CLIRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIRunner.swift; sourceTree = "<group>"; };
+		B10012 /* SetupWizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupWizardView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -59,6 +63,8 @@
 				B10005 /* DaemonManager.swift */,
 				B10006 /* DaemonConfig.swift */,
 				B10007 /* DaemonState.swift */,
+				B10011 /* CLIRunner.swift */,
+				B10012 /* SetupWizardView.swift */,
 				B10008 /* Assets.xcassets */,
 				B10009 /* Info.plist */,
 			);
@@ -149,6 +155,8 @@
 				A10005 /* DaemonManager.swift in Sources */,
 				A10006 /* DaemonConfig.swift in Sources */,
 				A10007 /* DaemonState.swift in Sources */,
+				A10009 /* CLIRunner.swift in Sources */,
+				A10010 /* SetupWizardView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
