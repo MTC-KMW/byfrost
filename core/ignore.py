@@ -45,12 +45,27 @@ DEFAULT_IGNORE_PATTERNS = [
 # Binary assets larger than this are skipped.
 MAX_FILE_SIZE = 2 * 1024 * 1024
 
+# Agent team coordination directories that must always be synced even if
+# .gitignore excludes them. Uses gitignore negation syntax.
+SYNC_ALLOW_PATTERNS = [
+    "!byfrost/",
+    "!compound/",
+    "!pm/",
+    "!qa/",
+    "!shared/",
+    "!tasks/",
+]
 
-def load_ignore_spec(project_dir: Path) -> pathspec.PathSpec:
+
+def load_ignore_spec(project_dir: Path, *, for_sync: bool = False) -> pathspec.PathSpec:
     """Load ignore patterns from .gitignore + defaults.
 
     Reads .gitignore from project_dir (if it exists) and merges with
     DEFAULT_IGNORE_PATTERNS. Returns a compiled PathSpec for matching.
+
+    When for_sync=True, appends negation patterns so that agent team
+    coordination directories are never ignored by the bridge file sync
+    (even though .gitignore correctly excludes them from git).
     """
     lines = list(DEFAULT_IGNORE_PATTERNS)
     gitignore = project_dir / ".gitignore"
@@ -63,6 +78,8 @@ def load_ignore_spec(project_dir: Path) -> pathspec.PathSpec:
                     lines.append(stripped)
         except OSError:
             pass
+    if for_sync:
+        lines.extend(SYNC_ALLOW_PATTERNS)
     return pathspec.PathSpec.from_lines("gitignore", lines)
 
 

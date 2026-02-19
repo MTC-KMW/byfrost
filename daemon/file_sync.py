@@ -44,7 +44,7 @@ class DaemonFileSync:
         self._broadcast = broadcast_fn
         self._send = send_fn
         self.log = logger
-        self._ignore_spec = load_ignore_spec(self.project_path)
+        self._ignore_spec = load_ignore_spec(self.project_path, for_sync=True)
         self._observer: Observer | None = None  # type: ignore[valid-type]
         self._suppressed: dict[str, float] = {}  # rel_path -> suppress_until
         self._pending: dict[str, asyncio.TimerHandle] = {}  # rel_path -> debounce handle

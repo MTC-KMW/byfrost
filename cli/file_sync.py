@@ -121,7 +121,7 @@ class SyncClient:
         self.project_dir = project_dir
         self.config = config
         self.log = logger
-        self._ignore_spec = load_ignore_spec(self.project_dir)
+        self._ignore_spec = load_ignore_spec(self.project_dir, for_sync=True)
         self._signer = MessageSigner(config["secret"]) if config.get("secret") else None
         self._use_tls = TLSManager.has_client_certs()
         self._ws: websockets.WebSocketClientProtocol | None = None  # type: ignore[name-defined]
