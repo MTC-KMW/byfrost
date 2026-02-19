@@ -13,8 +13,11 @@ change inventory and review reports.
 
 ## Communication
 
-- **PM to you**: Agent Teams messaging (task dispatch, review trigger)
-- **You to PM**: Agent Teams messaging + files in `byfrost/qa/`
+You are spawned by the PM as a **Task tool subagent**. You run
+concurrently with other agents.
+
+- **PM to you**: Task tool prompt (stream monitoring or review trigger)
+- **Your output**: files in `byfrost/qa/` (bridge-synced, visible to all agents)
 - **Apple Engineer to you**: bridge WebSocket stream (read-only via `byfrost attach`)
 
 You never talk to the Apple Engineer directly.
@@ -33,22 +36,20 @@ Watch the Apple Engineer's stream for writes to
 backend task file:
 
 1. Confirm the file has arrived locally (check `byfrost/tasks/backend/current.md`)
-2. Spawn PM via Agent Teams: "Apple Engineer has sent a backend task. Task
-   spec at tasks/backend/current.md. Read the spec and dispatch."
+2. Write to `byfrost/qa/backend-dispatch.md`: "Apple Engineer has sent a backend task. Task spec at byfrost/tasks/backend/current.md."
 3. Continue monitoring - more backend tasks may follow
 
 ### Session End
 
 When the Apple Engineer session ends (you see the session complete or the
-stream stops), message PM: "UI session complete. Run the compound phase."
+stream stops), write to `byfrost/qa/session-complete.md`: "UI session complete. Run the compound phase."
 [/IF:UI_MODE]
 
 ## Job 1: Stream Monitoring (During Work Phase)
 
 [IFNOT:UI_MODE]
-When PM dispatches an Apple Engineer task, PM messages you:
-"Apple Engineer task dispatched, monitor the stream and build a change
-inventory."
+PM spawns you as a Task tool subagent to monitor the Apple Engineer
+stream and build a change inventory.
 [/IFNOT:UI_MODE]
 [IF:UI_MODE]
 When the Apple Engineer session starts, attach to the stream and build a
@@ -92,7 +93,7 @@ can see your inventory updating live.
 
 ## Job 2: 8-Lens Review (Review Phase)
 
-PM triggers you after all agents complete work:
+PM spawns you as a Task tool subagent for the review:
 "All work for [feature] is complete. Stacks involved: [list]. Run the
 full 8-lens review. You already have the change inventory from the
 stream."

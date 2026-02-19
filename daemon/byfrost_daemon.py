@@ -955,6 +955,9 @@ class ByfrostDaemon:
             self._bundle_chunks: list[bytes] = []
             self._bundle_total = msg.get("total_size", 0)
             self.log.info(f"Receiving git bundle ({self._bundle_total} bytes)")
+            # Mark manifest as already sent so the main loop doesn't flood
+            # the bundle connection with file.sync messages
+            ws._manifest_sent = True  # type: ignore[attr-defined]
             await self._send(ws, "project.bundle.ack", {"status": "ready"})
 
         elif action == "chunk":
@@ -1262,7 +1265,7 @@ class ByfrostDaemon:
                 ssl=ssl_context,
                 ping_interval=20,
                 ping_timeout=10,
-                max_size=2**20,  # 1MB max message
+                max_size=4 * 1024 * 1024,  # 4MB - fits 2MB file base64-encoded
             ):
                 self.log.info(f"WebSocket server ready ({protocol}://0.0.0.0:{port})")
                 await asyncio.Future()  # Run forever

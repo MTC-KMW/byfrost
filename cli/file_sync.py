@@ -42,8 +42,10 @@ DEBOUNCE_MS = 100
 # Echo suppression TTL in seconds
 SUPPRESS_TTL = 0.5
 
-# Reconnect delay on connection loss
-RECONNECT_DELAY = 5
+# Reconnect backoff parameters
+RECONNECT_MIN = 1       # initial delay (seconds)
+RECONNECT_MAX = 60      # cap (seconds)
+RECONNECT_FACTOR = 2    # exponential multiplier
 
 # PID file for the sync process
 PID_FILE = BRIDGE_DIR / "sync.pid"
@@ -131,27 +133,41 @@ class SyncClient:
 
     async def run(self) -> None:
         """Main loop: watch files and maintain WebSocket connection."""
+        import random
         import ssl as _ssl
 
         self._loop = asyncio.get_event_loop()
         self._start_watcher()
         self.log.info(f"Sync client started for {self.project_dir}")
 
+        backoff = RECONNECT_MIN
         while self._running:
             try:
                 await self._connect_and_sync()
+                # Clean disconnect - reset backoff
+                backoff = RECONNECT_MIN
             except _ssl.SSLError as e:
                 self.log.error(f"TLS error: {e}. Fix certs or re-run 'byfrost connect'.")
                 break
             except (ConnectionRefusedError, OSError) as e:
-                self.log.warning(f"Connection failed: {e}. Retrying in {RECONNECT_DELAY}s...")
-                await asyncio.sleep(RECONNECT_DELAY)
+                self.log.warning(f"Connection failed: {e}")
             except websockets.exceptions.ConnectionClosed as e:
-                self.log.warning(f"Connection lost: {e}. Reconnecting in {RECONNECT_DELAY}s...")
-                await asyncio.sleep(RECONNECT_DELAY)
+                self.log.warning(f"Connection lost: {e}")
             except Exception as e:
-                self.log.error(f"Unexpected error: {e}. Reconnecting in {RECONNECT_DELAY}s...")
-                await asyncio.sleep(RECONNECT_DELAY)
+                self.log.error(f"Unexpected error: {e}")
+            finally:
+                # Always clear WS ref so debounced sends don't hit a dead socket
+                self._ws = None
+
+            if not self._running:
+                break
+
+            # Exponential backoff with jitter
+            jitter = random.uniform(0, backoff * 0.3)
+            delay = min(backoff + jitter, RECONNECT_MAX)
+            self.log.info(f"Reconnecting in {delay:.1f}s...")
+            await asyncio.sleep(delay)
+            backoff = min(backoff * RECONNECT_FACTOR, RECONNECT_MAX)
 
     async def _connect_and_sync(self) -> None:
         """Connect to daemon, send manifest, listen for sync messages."""
@@ -160,7 +176,7 @@ class SyncClient:
 
         self._ws = await websockets.connect(
             uri, ssl=ssl_ctx, ping_interval=20, ping_timeout=10,
-            close_timeout=5, max_size=2**20,
+            close_timeout=5, max_size=4 * 1024 * 1024,  # 4MB - fits 2MB file base64
         )
         self.log.info(f"Connected to daemon at {uri}")
 
@@ -216,12 +232,17 @@ class SyncClient:
         """Send file contents or deletion to daemon."""
         self._pending.pop(rel_path, None)
 
-        if self._ws is None:
+        ws = self._ws
+        if ws is None:
             return
 
         if deleted:
             msg = self._sign({"type": "file.changed", "path": rel_path, "deleted": True})
-            await self._ws.send(json.dumps(msg))
+            try:
+                await ws.send(json.dumps(msg))
+            except (websockets.exceptions.ConnectionClosed, OSError):
+                self.log.debug(f"Send failed (disconnected): {rel_path}")
+                return
             self.log.debug(f"Synced deletion: {rel_path}")
             return
 
@@ -253,7 +274,11 @@ class SyncClient:
             "checksum": checksum,
             "mtime": mtime,
         })
-        await self._ws.send(json.dumps(msg))
+        try:
+            await ws.send(json.dumps(msg))
+        except (websockets.exceptions.ConnectionClosed, OSError):
+            self.log.debug(f"Send failed (disconnected): {rel_path}")
+            return
         self.log.debug(f"Synced file: {rel_path} ({len(data)} bytes)")
 
     # --- Inbound: message from daemon -> write locally ---
@@ -335,9 +360,15 @@ class SyncClient:
     # --- Initial sync ---
 
     async def _send_manifest(self) -> None:
-        """Send all local project files on connect."""
+        """Send all local project files on connect.
+
+        Yields between files and aborts if the connection drops mid-manifest.
+        """
         count = 0
         for f in self.project_dir.rglob("*"):
+            if self._ws is None:
+                self.log.warning(f"Manifest aborted (disconnected) after {count} files")
+                return
             if f.is_symlink() or not f.is_file():
                 continue
             if not self._is_inside_project(f):
@@ -355,6 +386,7 @@ class SyncClient:
                 continue
             await self._send_file(rel, deleted=False)
             count += 1
+            # Yield to event loop - prevents starving ping/pong
             await asyncio.sleep(0)
 
         self.log.info(f"Sent manifest: {count} files")

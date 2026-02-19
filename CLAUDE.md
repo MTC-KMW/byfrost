@@ -92,3 +92,9 @@ cd server && docker compose up              # full stack (app + postgres + redis
 
 See `byfrost-build-plan.md` for the complete product architecture and
 phased implementation plan.
+---
+
+## Byfrost Agent Team
+
+See `byfrost/CLAUDE.md` for team configuration and coordination.
+Agent role instructions are in `byfrost/{role}/CLAUDE.md`.

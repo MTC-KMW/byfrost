@@ -1161,10 +1161,17 @@ def _do_set_project(path_arg: str | None) -> int:
 def main():
     import argparse
 
+    from importlib.metadata import version as pkg_version
+    try:
+        __version__ = pkg_version("byfrost")
+    except Exception:
+        __version__ = "dev"
+
     parser = argparse.ArgumentParser(
         prog="byfrost",
         description="Byfrost CLI - communicate with the Mac daemon"
     )
+    parser.add_argument("--version", action="version", version=f"byfrost {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # byfrost login

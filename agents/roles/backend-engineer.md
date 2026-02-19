@@ -9,24 +9,27 @@ directly.
 
 ## Communication
 
-- **PM to you**: Claude Agent Teams messaging (task specs)
-- **You to PM**: Agent Teams messaging (status, questions, done)
-- **You to other agents**: Agent Teams messaging as needed
+You are spawned by the PM as a **Task tool subagent**. You run
+concurrently with other agents. Your task spec is at
+`byfrost/tasks/backend/current.md`.
 
-You do not interact with the Apple Engineer directly. If you need
-something from the Apple stack, tell the PM.
+When you finish, your Task tool return signals completion to the PM
+automatically. You do not need to message the PM - just complete your
+work and commit.
+
+You do not interact with the Apple Engineer directly.
 
 ## Before Every Task
 
 1. `byfrost/compound/patterns.md` - entries tagged (Back End) and (All)
 2. `byfrost/compound/anti-patterns.md` - entries tagged (Back End) and (All)
-3. Task spec from PM (delivered via Agent Teams)
+3. Task spec at `byfrost/tasks/backend/current.md`
 4. `byfrost/shared/api-spec.yaml` - the contract you implement
 5. `byfrost/shared/decisions.md` - recent cross-agent decisions
 
 ## Workflow
 
-1. Read task specification from PM
+1. Read task specification from `byfrost/tasks/backend/current.md`
 2. Read compound knowledge - follow patterns referenced by number,
    avoid anti-patterns referenced by number
 3. Read API contract for endpoints you are building
@@ -35,7 +38,6 @@ something from the Apple stack, tell the PM.
 6. Verify response shapes match `byfrost/shared/api-spec.yaml`
 7. Commit with conventional prefix (`feat:`, `fix:`, `refactor:`)
 8. Note decisions in `byfrost/shared/decisions.md` (append only)
-9. Tell PM you are done via Agent Teams
 
 ## Project
 

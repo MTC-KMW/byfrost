@@ -691,7 +691,11 @@ def create_coordination_dirs(project_dir: Path, config: TeamConfig) -> list[str]
 
 
 def write_template_files(project_dir: Path, values: dict[str, str]) -> list[str]:
-    """Copy and process template files to byfrost/. Returns created paths."""
+    """Copy and process template files to byfrost/. Returns created paths.
+
+    Skips files that already exist to preserve user/agent edits (e.g.
+    compound cycle findings accumulated across sessions).
+    """
     bf_dir = project_dir / BYFROST_SUBDIR
     created = []
     for template_name, output_path in TEMPLATE_FILE_MAP.items():
@@ -699,10 +703,13 @@ def write_template_files(project_dir: Path, values: dict[str, str]) -> list[str]
         if not template_path.exists():
             continue
 
+        out = bf_dir / output_path
+        if out.exists():
+            continue
+
         content = template_path.read_text()
         content = substitute_placeholders(content, values)
 
-        out = bf_dir / output_path
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(content)
         created.append(f"{BYFROST_SUBDIR}/{output_path}")
@@ -758,17 +765,19 @@ def create_stub_files(project_dir: Path, config: TeamConfig) -> list[str]:
 
     for p in paths:
         out = bf_dir / p
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(task_stub)
-        created.append(f"{BYFROST_SUBDIR}/{p}")
+        if not out.exists():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(task_stub)
+            created.append(f"{BYFROST_SUBDIR}/{p}")
 
     # PM status
     pm_status = bf_dir / "pm" / "status.md"
-    pm_status.parent.mkdir(parents=True, exist_ok=True)
-    pm_status.write_text(
-        "# PM Status\n\n_Cycle tracking. Updated by PM after each phase._\n"
-    )
-    created.append(f"{BYFROST_SUBDIR}/pm/status.md")
+    if not pm_status.exists():
+        pm_status.parent.mkdir(parents=True, exist_ok=True)
+        pm_status.write_text(
+            "# PM Status\n\n_Cycle tracking. Updated by PM after each phase._\n"
+        )
+        created.append(f"{BYFROST_SUBDIR}/pm/status.md")
 
     # QA working files
     qa_files = {
@@ -783,9 +792,10 @@ def create_stub_files(project_dir: Path, config: TeamConfig) -> list[str]:
     }
     for path, content in qa_files.items():
         out = bf_dir / path
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(content)
-        created.append(f"{BYFROST_SUBDIR}/{path}")
+        if not out.exists():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(content)
+            created.append(f"{BYFROST_SUBDIR}/{path}")
 
     return created
 
@@ -1047,6 +1057,22 @@ def _send_git_bundle(project_dir: Path) -> bool:
             uri, ssl=ssl_ctx, open_timeout=10, close_timeout=5,
             max_size=2**22,  # 4MB per message
         ) as ws:
+
+            async def _recv_bundle_msg(timeout: float) -> dict:
+                """Receive next bundle-related message, skipping file.sync manifest."""
+                deadline = asyncio.get_event_loop().time() + timeout
+                while True:
+                    remaining = deadline - asyncio.get_event_loop().time()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError()
+                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                    msg = json.loads(raw)
+                    # Skip file manifest messages that the daemon sends
+                    # after the first handler response
+                    if msg.get("type") in ("file.sync", "file.changed"):
+                        continue
+                    return msg
+
             # Start
             await ws.send(json.dumps(sign({
                 "type": "project.bundle",
@@ -1054,8 +1080,10 @@ def _send_git_bundle(project_dir: Path) -> bool:
                 "total_size": bundle_size,
             })))
 
-            raw = await asyncio.wait_for(ws.recv(), timeout=10)
-            resp = json.loads(raw)
+            resp = await _recv_bundle_msg(timeout=10)
+            if resp.get("type") == "error":
+                _print_error(f"  Daemon rejected bundle: {resp.get('message', 'unknown')}")
+                return False
             if resp.get("type") != "project.bundle.ack":
                 _print_error(f"  Unexpected response: {resp.get('type')}")
                 return False
@@ -1080,8 +1108,7 @@ def _send_git_bundle(project_dir: Path) -> bool:
                 "checksum": checksum,
             })))
 
-            raw = await asyncio.wait_for(ws.recv(), timeout=120)
-            resp = json.loads(raw)
+            resp = await _recv_bundle_msg(timeout=120)
             if resp.get("type") == "project.bundle.result" and resp.get("status") == "ok":
                 return True
             _print_error(f"  Bundle transfer failed: {resp.get('message', 'unknown')}")

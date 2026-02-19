@@ -103,10 +103,14 @@ class DaemonFileSync:
         self._pending.pop(rel_path, None)
 
         if deleted:
-            await self._broadcast("file.changed", {
-                "path": rel_path,
-                "deleted": True,
-            })
+            try:
+                await self._broadcast("file.changed", {
+                    "path": rel_path,
+                    "deleted": True,
+                })
+            except Exception:
+                self.log.debug(f"Broadcast failed (no clients?): {rel_path}")
+                return
             self.log.debug(f"Synced deletion: {rel_path}")
             return
 
@@ -131,12 +135,16 @@ class DaemonFileSync:
             return
 
         checksum = hashlib.sha256(data).hexdigest()
-        await self._broadcast("file.sync", {
-            "path": rel_path,
-            "data": base64.b64encode(data).decode("ascii"),
-            "checksum": checksum,
-            "mtime": mtime,
-        })
+        try:
+            await self._broadcast("file.sync", {
+                "path": rel_path,
+                "data": base64.b64encode(data).decode("ascii"),
+                "checksum": checksum,
+                "mtime": mtime,
+            })
+        except Exception:
+            self.log.debug(f"Broadcast failed (no clients?): {rel_path}")
+            return
         self.log.debug(f"Synced file: {rel_path} ({len(data)} bytes)")
 
     # --- Inbound: message from controller -> write locally ---
@@ -218,9 +226,19 @@ class DaemonFileSync:
     # --- Initial sync: send all files to a newly connected client ---
 
     async def send_full_manifest(self, ws: Any) -> None:
-        """Send all project files to one client for initial sync."""
+        """Send all project files to one client for initial sync.
+
+        Yields between files and aborts if the connection drops.
+        """
         count = 0
         for f in self.project_path.rglob("*"):
+            # Abort if the client disconnected mid-manifest
+            if getattr(ws, "closed", False) is True:
+                self.log.warning(
+                    f"Manifest aborted (client disconnected) after {count} files"
+                )
+                return
+
             if f.is_symlink() or not f.is_file():
                 continue
             if not self._is_inside_project(f):
@@ -244,14 +262,20 @@ class DaemonFileSync:
                 continue
 
             checksum = hashlib.sha256(data).hexdigest()
-            await self._send(ws, "file.sync", {
-                "path": rel,
-                "data": base64.b64encode(data).decode("ascii"),
-                "checksum": checksum,
-                "mtime": mtime,
-            })
+            try:
+                await self._send(ws, "file.sync", {
+                    "path": rel,
+                    "data": base64.b64encode(data).decode("ascii"),
+                    "checksum": checksum,
+                    "mtime": mtime,
+                })
+            except Exception:
+                self.log.warning(
+                    f"Manifest aborted (send error) after {count} files"
+                )
+                return
             count += 1
-            # Yield to event loop between files
+            # Yield to event loop - prevents starving ping/pong
             await asyncio.sleep(0)
 
         self.log.info(f"Sent manifest: {count} files")

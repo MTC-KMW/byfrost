@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "byfrost"
-version = "0.1.0"
+version = "0.2.0"
 description = "Secure bridge for real-time remote Claude Code execution"
 readme = "README.md"
 license = {text = "Elastic-2.0"}
