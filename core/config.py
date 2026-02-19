@@ -20,6 +20,7 @@ SECRET_FILE = BRIDGE_DIR / "secret"
 SECRET_HISTORY_FILE = BRIDGE_DIR / "secret.history"
 AUTH_FILE = BRIDGE_DIR / "auth.json"
 DAEMON_CONFIG_FILE = BRIDGE_DIR / "daemon.json"
+DAEMON_SOCK = BRIDGE_DIR / "daemon.sock"
 
 # ---------------------------------------------------------------------------
 # Defaults

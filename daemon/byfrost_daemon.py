@@ -33,11 +33,12 @@ from typing import Optional
 try:
     import websockets
     from websockets import serve
+    from websockets.asyncio.server import unix_serve
 except ImportError:
     print("ERROR: websockets not installed. Run: pip3 install websockets")
     sys.exit(1)
 
-from core.config import BRIDGE_DIR, DEFAULT_PORT, LOG_DIR, source_env_file
+from core.config import BRIDGE_DIR, DAEMON_SOCK, DEFAULT_PORT, LOG_DIR, source_env_file
 from core.security import (
     AuditLogger,
     MessageSigner,
@@ -1256,7 +1257,11 @@ class ByfrostDaemon:
                 self.file_sync.start(asyncio.get_event_loop())
             )
 
-        # Start WebSocket server
+        # Start WebSocket servers: TCP (mTLS) + Unix socket (local CLI)
+        sock_path = str(DAEMON_SOCK)
+        # Clean up stale socket
+        DAEMON_SOCK.unlink(missing_ok=True)
+
         try:
             async with serve(
                 self.handle_client,
@@ -1268,7 +1273,18 @@ class ByfrostDaemon:
                 max_size=4 * 1024 * 1024,  # 4MB - fits 2MB file base64-encoded
             ):
                 self.log.info(f"WebSocket server ready ({protocol}://0.0.0.0:{port})")
-                await asyncio.Future()  # Run forever
+
+                # Local Unix socket for CLI commands (no TLS needed)
+                async with unix_serve(
+                    self.handle_client,
+                    sock_path,
+                    ping_interval=20,
+                    ping_timeout=10,
+                    max_size=4 * 1024 * 1024,
+                ):
+                    os.chmod(sock_path, 0o600)
+                    self.log.info(f"Local socket ready ({sock_path})")
+                    await asyncio.Future()  # Run forever
         except asyncio.CancelledError:
             self.log.info("Server shutting down...")
         finally:
@@ -1286,6 +1302,7 @@ class ByfrostDaemon:
                 self.sessions.cleanup(active.id)
 
             PID_FILE.unlink(missing_ok=True)
+            DAEMON_SOCK.unlink(missing_ok=True)
             self.log.info("Daemon stopped")
 
 

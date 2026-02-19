@@ -49,6 +49,7 @@ from cli.api_client import (
 from core.config import (
     AUTH_FILE,
     CERTS_DIR,
+    DAEMON_SOCK,
     DEFAULT_PORT,
     DEFAULT_SERVER_URL,
     SECRET_FILE,
@@ -108,25 +109,34 @@ class ByfrostClient:
     def __init__(self, config):
         self.config = config
         self._signer = MessageSigner(config["secret"]) if config.get("secret") else None
+        self._is_localhost = config["host"] in ("localhost", "127.0.0.1", "::1")
 
-        # Determine TLS availability.
-        # On the Mac (worker), client certs don't exist but server certs do.
-        # Use server cert as client identity for local mTLS - the daemon's CA
-        # verification accepts any cert signed by the pairing CA.
-        self._use_tls = TLSManager.has_client_certs() or TLSManager.has_server_certs()
+        # Determine TLS availability
+        self._use_tls = TLSManager.has_client_certs()
         protocol = "wss" if self._use_tls else "ws"
         self.uri = f"{protocol}://{config['host']}:{config['port']}"
 
     async def _connect(self):
+        from websockets.asyncio.client import unix_connect
+
+        # Local connections: use Unix socket (no TLS needed, OS-enforced access)
+        if self._is_localhost and DAEMON_SOCK.exists():
+            try:
+                return await unix_connect(
+                    "ws://localhost/",
+                    unix=str(DAEMON_SOCK),
+                    ping_interval=20,
+                    ping_timeout=10,
+                    close_timeout=5,
+                )
+            except Exception:
+                pass  # Fall through to TCP
+
         ssl_context = None
-        uri = self.uri  # local copy - don't permanently mutate self.uri
+        uri = self.uri
         if self._use_tls:
             try:
-                if TLSManager.has_client_certs():
-                    ssl_context = TLSManager.get_client_ssl_context()
-                else:
-                    # Worker machine: use server cert as client identity for local mTLS
-                    ssl_context = TLSManager.get_local_ssl_context()
+                ssl_context = TLSManager.get_client_ssl_context()
             except Exception as e:
                 _print_error(f"TLS setup failed: {e}")
                 _print_error("Falling back to plaintext (Tailscale encryption only)")

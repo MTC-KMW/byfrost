@@ -230,23 +230,6 @@ class TLSManager:
         return ctx
 
     @classmethod
-    def get_local_ssl_context(cls):
-        """Create SSL context for local CLI on the worker machine.
-
-        Uses the server cert as client identity. The daemon's mTLS only
-        checks that the peer cert is signed by the pairing CA - it does
-        not enforce Extended Key Usage, so the server cert works.
-        """
-        import ssl
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_3
-        ctx.load_cert_chain(str(cls.SERVER_CERT), str(cls.SERVER_KEY))
-        ctx.load_verify_locations(str(cls.CA_CERT))
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_REQUIRED
-        return ctx
-
-    @classmethod
     def cert_info(cls) -> dict:
         """Return summary of certificate status."""
         info = {
