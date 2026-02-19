@@ -109,8 +109,11 @@ class ByfrostClient:
         self.config = config
         self._signer = MessageSigner(config["secret"]) if config.get("secret") else None
 
-        # Determine TLS availability
-        self._use_tls = TLSManager.has_client_certs()
+        # Determine TLS availability.
+        # On the Mac (worker), client certs don't exist but server certs do.
+        # Use server cert as client identity for local mTLS - the daemon's CA
+        # verification accepts any cert signed by the pairing CA.
+        self._use_tls = TLSManager.has_client_certs() or TLSManager.has_server_certs()
         protocol = "wss" if self._use_tls else "ws"
         self.uri = f"{protocol}://{config['host']}:{config['port']}"
 
@@ -119,7 +122,11 @@ class ByfrostClient:
         uri = self.uri  # local copy - don't permanently mutate self.uri
         if self._use_tls:
             try:
-                ssl_context = TLSManager.get_client_ssl_context()
+                if TLSManager.has_client_certs():
+                    ssl_context = TLSManager.get_client_ssl_context()
+                else:
+                    # Worker machine: use server cert as client identity for local mTLS
+                    ssl_context = TLSManager.get_local_ssl_context()
             except Exception as e:
                 _print_error(f"TLS setup failed: {e}")
                 _print_error("Falling back to plaintext (Tailscale encryption only)")
