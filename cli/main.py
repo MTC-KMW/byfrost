@@ -123,8 +123,8 @@ class ByfrostClient:
         if self._is_localhost and DAEMON_SOCK.exists():
             try:
                 return await unix_connect(
+                    str(DAEMON_SOCK),
                     "ws://localhost/",
-                    unix=str(DAEMON_SOCK),
                     ping_interval=20,
                     ping_timeout=10,
                     close_timeout=5,
