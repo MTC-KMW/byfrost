@@ -1213,7 +1213,6 @@ def _do_set_project(path_arg: str | None) -> int:
 
 def main():
     import argparse
-
     from importlib.metadata import version as pkg_version
     try:
         __version__ = pkg_version("byfrost")
