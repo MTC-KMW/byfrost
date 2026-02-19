@@ -1119,6 +1119,18 @@ def _send_git_bundle(project_dir: Path) -> bool:
         if success:
             _print_status("  Git bundle transferred successfully")
         return success
+    except asyncio.TimeoutError:
+        _print_error(
+            "  Bundle transfer timed out."
+            " Check that the worker daemon is running."
+        )
+        return False
+    except ConnectionRefusedError:
+        _print_error(
+            "  Could not connect to worker."
+            " Is the daemon running? Try: byfrost daemon status"
+        )
+        return False
     except Exception as e:
         _print_error(f"  Bundle transfer failed: {e}")
         return False

@@ -21,6 +21,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from collections import deque
@@ -390,7 +391,8 @@ class SessionManager:
 
         # Create tmux session running the command
         try:
-            exit_marker = f'/tmp/byfrost-{task.id}.exit'
+            tmpdir = tempfile.gettempdir()
+            exit_marker = f'{tmpdir}/byfrost-{task.id}.exit'
             wrapper = claude_cmd + f'; echo "EXIT_CODE:$?" > {exit_marker}; sleep 2'
             subprocess.run(
                 ["tmux", "new-session", "-d", "-s", name, "-x", "200", "-y", "50",
@@ -400,14 +402,26 @@ class SessionManager:
             task.tmux_session = name
             self.log.info(f"Spawned tmux session: {name}")
             return name
+        except FileNotFoundError:
+            msg = (
+                "tmux is not installed. Install with:"
+                " brew install tmux (macOS)"
+                " or apt install tmux (Linux)"
+            )
+            self.log.error(msg)
+            raise RuntimeError(msg)
         except subprocess.CalledProcessError as e:
-            self.log.error(f"Failed to create tmux session: {e.stderr.decode()}")
-            raise
+            stderr = e.stderr.decode().strip() if e.stderr else ""
+            msg = f"Failed to create tmux session: {stderr}"
+            if not stderr:
+                msg = "Failed to create tmux session"
+            self.log.error(msg)
+            raise RuntimeError(msg)
 
     def capture_output(self, task):
         """Set up a pipe to capture tmux pane output."""
         name = task.tmux_session
-        pipe_path = f"/tmp/byfrost-{task.id}.pipe"
+        pipe_path = f"{tempfile.gettempdir()}/byfrost-{task.id}.pipe"
 
         # Create named pipe
         if not os.path.exists(pipe_path):
@@ -445,7 +459,7 @@ class SessionManager:
 
     def get_exit_code(self, task_id):
         """Read the exit code file left by the wrapper script."""
-        exit_file = Path(f"/tmp/byfrost-{task_id}.exit")
+        exit_file = Path(f"{tempfile.gettempdir()}/byfrost-{task_id}.exit")
         if exit_file.exists():
             try:
                 content = exit_file.read_text().strip()
@@ -469,7 +483,7 @@ class SessionManager:
     def cleanup(self, task_id):
         """Clean up temp files for a task."""
         for suffix in [".pipe", ".exit"]:
-            path = Path(f"/tmp/byfrost-{task_id}{suffix}")
+            path = Path(f"{tempfile.gettempdir()}/byfrost-{task_id}{suffix}")
             try:
                 path.unlink(missing_ok=True)
             except OSError:
@@ -1028,7 +1042,6 @@ class ByfrostDaemon:
         """Handle git bundle transfer from controller."""
         import base64
         import hashlib
-        import tempfile
 
         action = msg.get("action", "")
         project = self.config.get("project_path", "")
@@ -1049,6 +1062,10 @@ class ByfrostDaemon:
                 self._bundle_chunks.append(chunk)
             except Exception as e:
                 self.log.warning(f"Invalid bundle chunk: {e}")
+                await self._send(ws, "project.bundle.result", {
+                    "status": "error",
+                    "message": f"Invalid chunk data: {e}",
+                })
 
         elif action == "complete":
             expected_checksum = msg.get("checksum", "")
@@ -1207,7 +1224,6 @@ class ByfrostDaemon:
                         "exit_code": exit_code or 0,
                         "duration": time.time() - start,
                         "output_lines": len(task.output_lines),
-                        "files_changed": len(task.output_lines),
                     })
                     break
 
