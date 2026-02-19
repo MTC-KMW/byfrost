@@ -48,6 +48,7 @@ from cli.api_client import (
 )
 from core.config import (
     AUTH_FILE,
+    BRIDGE_DIR,
     CERTS_DIR,
     DAEMON_SOCK,
     DEFAULT_PORT,
@@ -1078,8 +1079,7 @@ def _do_daemon(action: str) -> int:
     if action == "install":
         _print_status("Installing byfrost daemon service...")
         if mgr.install():
-            _print_status("Daemon service installed and enabled.")
-            _print_status("Run 'byfrost daemon start' to start it.")
+            _print_status("Daemon service installed, enabled, and started.")
             return 0
         else:
             _print_error("Failed to install daemon service.")
@@ -1125,10 +1125,46 @@ def _do_daemon(action: str) -> int:
             _print_status("Daemon: not installed")
             _print_status("Run 'byfrost daemon install' to set up the service.")
             return 0
-        state = "running" if info["running"] else "stopped"
-        _print_status(f"Daemon: {state}")
-        if info.get("pid"):
-            _print_status(f"PID: {info['pid']}")
+
+        # Read rich state from state.json if available
+        state: dict = {}
+        state_file = BRIDGE_DIR / "state.json"
+        if state_file.exists():
+            try:
+                state = json.loads(state_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        if info["running"]:
+            _print_status(f"Daemon: running (PID {info.get('pid', '?')})")
+            if state.get("started_at"):
+                uptime = time.time() - state["started_at"]
+                _print_status(f"Uptime: {_format_duration(uptime)}")
+            if state.get("project_path"):
+                _print_status(f"Project: {state['project_path']}")
+            if state.get("clients") is not None:
+                _print_status(f"Connected clients: {state['clients']}")
+            if state.get("active_task"):
+                task = state["active_task"]
+                _print_status(f"Active task: {task.get('id', '?')}")
+            else:
+                _print_status("Active task: none")
+            _print_status(f"Queue: {state.get('queue_size', 0)}")
+            if state.get("version"):
+                _print_status(f"Version: {state['version']}")
+            if state.get("last_error"):
+                _print_error(f"Last error: {state['last_error']}")
+        else:
+            # Not running but installed
+            if state.get("state") == "stopped":
+                _print_status("Daemon: stopped (clean shutdown)")
+            elif state.get("pid"):
+                _print_status("Daemon: crashed")
+                if state.get("last_error"):
+                    _print_error(f"Last error: {state['last_error']}")
+            else:
+                _print_status("Daemon: stopped")
+            _print_status("Run 'byfrost daemon start' to start it.")
         return 0
 
     else:

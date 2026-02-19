@@ -594,6 +594,17 @@ class ByfrostDaemon:
         self._clients = set()
         self._running = True
         self._task_runners = {}  # task_id -> asyncio.Task
+        self._last_error: str | None = None
+        self._start_time: float = 0.0
+        self._restart_handle: asyncio.TimerHandle | None = None
+        self._restart_reason: str | None = None
+
+        # Version for state reporting
+        try:
+            import importlib.metadata
+            self._version = importlib.metadata.version("byfrost")
+        except Exception:
+            self._version = "dev"
 
         # Security components
         self.audit = AuditLogger()
@@ -610,13 +621,14 @@ class ByfrostDaemon:
             config, logger, on_secret_rotated=self._refresh_signers,
         )
 
-        # File sync for coordination directories
+        # File sync (all project files, bidirectional)
         from daemon.file_sync import DaemonFileSync
         self.file_sync = DaemonFileSync(
             project_path=config.get("project_path", ""),
             broadcast_fn=self._broadcast,
             send_fn=self._send,
             logger=logger,
+            on_source_changed=self._schedule_restart,
         )
 
     def _refresh_signers(self) -> None:
@@ -625,6 +637,73 @@ class ByfrostDaemon:
         self._signers = [MessageSigner(s) for s in valid]
         self._primary_signer = MessageSigner(valid[0]) if valid else None
         self.log.info(f"Signers refreshed ({len(valid)} valid secrets)")
+
+    # --- State File ---
+
+    def _write_state(self, **overrides) -> None:
+        """Write daemon state to ~/.byfrost/state.json.
+
+        Called on key lifecycle events. Atomic write via tmp + rename.
+        """
+        active = self.queue.active
+        state = {
+            "pid": os.getpid(),
+            "started_at": self._start_time or None,
+            "state": "running",
+            "project_path": self.config.get("project_path", ""),
+            "clients": len(self._clients),
+            "active_task": active.summary() if active else None,
+            "queue_size": len(self.queue._queue),
+            "last_error": self._last_error,
+            "python": sys.executable,
+            "version": self._version,
+            "updated_at": time.time(),
+        }
+        state.update(overrides)
+
+        tmp = STATE_FILE.with_suffix(".tmp")
+        try:
+            tmp.write_text(json.dumps(state, indent=2) + "\n")
+            tmp.replace(STATE_FILE)
+        except OSError as e:
+            self.log.warning(f"Failed to write state file: {e}")
+
+    # --- Auto-Restart on Source Changes ---
+
+    def _schedule_restart(self, changed_file: str) -> None:
+        """Schedule a debounced daemon restart after source file changes.
+
+        Waits for additional changes (batch), then exits so the service
+        manager restarts with updated code.
+        """
+        from daemon.file_sync import RESTART_DEBOUNCE_S
+
+        self._restart_reason = changed_file
+
+        # Reset debounce timer
+        if self._restart_handle is not None:
+            self._restart_handle.cancel()
+
+        loop = asyncio.get_event_loop()
+        self._restart_handle = loop.call_later(
+            RESTART_DEBOUNCE_S,
+            lambda: loop.create_task(self._do_restart()),
+        )
+        self.log.info(
+            f"Restart scheduled in {RESTART_DEBOUNCE_S}s "
+            f"(source changed: {changed_file})"
+        )
+
+    async def _do_restart(self) -> None:
+        """Execute restart: write state and exit with EX_TEMPFAIL."""
+        reason = self._restart_reason or "source file changed"
+        self.log.info(f"Restarting daemon: {reason}")
+        self._write_state(state="restarting", last_error=f"Auto-restart: {reason}")
+        await asyncio.sleep(0.1)
+        # Exit non-zero so service manager restarts us:
+        # - launchd: KeepAlive + SuccessfulExit=false
+        # - systemd: Restart=on-failure
+        os._exit(75)
 
     # --- Authentication ---
 
@@ -663,6 +742,7 @@ class ByfrostDaemon:
     async def handle_client(self, websocket):
         """Handle a single WebSocket client connection."""
         self._clients.add(websocket)
+        self._write_state()
         peer = websocket.remote_address
         source = f"{peer[0]}:{peer[1]}" if peer else "unknown"
         self.log.info(f"Client connected: {source}")
@@ -717,6 +797,7 @@ class ByfrostDaemon:
             self.log.info(f"Client disconnected: {source}")
         finally:
             self._clients.discard(websocket)
+            self._write_state()
 
     async def _send(self, ws, msg_type, payload=None):
         """Send a signed message to a client."""
@@ -1051,8 +1132,11 @@ class ByfrostDaemon:
 
         try:
             self.sessions.create_session(task)
+            self._write_state()
         except Exception as e:
             self.queue.complete(task, exit_code=1, error=str(e))
+            self._last_error = str(e)
+            self._write_state()
             await self._broadcast("task.error", {
                 "task_id": task.id,
                 "error": str(e),
@@ -1116,6 +1200,7 @@ class ByfrostDaemon:
                 if not self.sessions.is_session_alive(task.tmux_session):
                     exit_code = self.sessions.get_exit_code(task.id)
                     self.queue.complete(task, exit_code=exit_code or 0)
+                    self._write_state()
 
                     await self._broadcast("task.complete", {
                         "task_id": task.id,
@@ -1162,16 +1247,19 @@ class ByfrostDaemon:
                         })
                         await self._process_queue()
 
-                # Log heartbeat
+                # Log heartbeat and update state file
                 summary = self.queue.status_summary()
                 self.log.debug(
                     f"Heartbeat: clients={len(self._clients)} "
                     f"active={'yes' if summary['active'] else 'no'} "
                     f"queued={summary['queue_size']}"
                 )
+                self._write_state()
 
             except Exception as e:
                 self.log.error(f"Health check error: {e}")
+                self._last_error = str(e)
+                self._write_state()
 
             # Prune expired secrets from history
             SecretManager.prune_history()
@@ -1197,8 +1285,9 @@ class ByfrostDaemon:
         self._start_time = time.time()
         BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Write PID file
+        # Write PID file and initial state
         PID_FILE.write_text(str(os.getpid()))
+        self._write_state(state="starting")
 
         port = self.config["port"]
         self.log.info(f"Byfrost Daemon starting on port {port}")
@@ -1284,6 +1373,7 @@ class ByfrostDaemon:
                 ):
                     os.chmod(sock_path, 0o600)
                     self.log.info(f"Local socket ready ({sock_path})")
+                    self._write_state(state="running")
                     await asyncio.Future()  # Run forever
         except asyncio.CancelledError:
             self.log.info("Server shutting down...")
@@ -1301,6 +1391,7 @@ class ByfrostDaemon:
                 self.sessions.kill_session(active.tmux_session)
                 self.sessions.cleanup(active.id)
 
+            self._write_state(state="stopped")
             PID_FILE.unlink(missing_ok=True)
             DAEMON_SOCK.unlink(missing_ok=True)
             self.log.info("Daemon stopped")

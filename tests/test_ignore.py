@@ -80,6 +80,37 @@ class TestGitignoreIntegration:
 
 
 # ---------------------------------------------------------------------------
+# for_sync mode (bridge file sync ignores .gitignore)
+# ---------------------------------------------------------------------------
+
+class TestForSyncMode:
+    """for_sync=True skips .gitignore - bridge syncs all project files."""
+
+    def test_gitignore_not_applied(self, tmp_path: Path) -> None:
+        (tmp_path / ".gitignore").write_text("*.log\nsecrets/\nbyfrost/\n")
+        spec = load_ignore_spec(tmp_path, for_sync=True)
+        # .gitignore patterns should NOT be applied
+        assert not should_ignore("app.log", spec)
+        assert not should_ignore("secrets/api_key.txt", spec)
+        assert not should_ignore("byfrost/tasks/apple/current.md", spec)
+
+    def test_defaults_still_applied(self, tmp_path: Path) -> None:
+        (tmp_path / ".gitignore").write_text("*.log\n")
+        spec = load_ignore_spec(tmp_path, for_sync=True)
+        # Build artifacts and caches still ignored
+        assert should_ignore(".git/HEAD", spec)
+        assert should_ignore("__pycache__/foo.pyc", spec)
+        assert should_ignore("node_modules/express/index.js", spec)
+        assert should_ignore(".DS_Store", spec)
+
+    def test_source_files_pass(self, tmp_path: Path) -> None:
+        spec = load_ignore_spec(tmp_path, for_sync=True)
+        assert not should_ignore("src/main.py", spec)
+        assert not should_ignore("mac-app/Byfrost/AppDelegate.swift", spec)
+        assert not should_ignore("byfrost/compound/patterns.md", spec)
+
+
+# ---------------------------------------------------------------------------
 # generate_checksums
 # ---------------------------------------------------------------------------
 

@@ -1066,7 +1066,7 @@ def _send_git_bundle(project_dir: Path) -> bool:
                     if remaining <= 0:
                         raise asyncio.TimeoutError()
                     raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-                    msg = json.loads(raw)
+                    msg: dict = json.loads(raw)
                     # Skip file manifest messages that the daemon sends
                     # after the first handler response
                     if msg.get("type") in ("file.sync", "file.changed"):

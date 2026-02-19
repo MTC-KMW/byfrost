@@ -29,6 +29,12 @@ DEBOUNCE_MS = 100
 # Echo suppression TTL in seconds - prevent re-syncing files we just wrote
 SUPPRESS_TTL = 0.5
 
+# Byfrost source directories - changes here require a daemon restart
+SOURCE_PATTERNS = ("core/", "daemon/", "cli/")
+
+# Debounce for restart: wait for batch of source changes to settle
+RESTART_DEBOUNCE_S = 5.0
+
 
 class DaemonFileSync:
     """Watches project files and syncs over WebSocket."""
@@ -39,6 +45,7 @@ class DaemonFileSync:
         broadcast_fn: Callable[..., Coroutine[Any, Any, None]],
         send_fn: Callable[..., Coroutine[Any, Any, None]],
         logger: logging.Logger,
+        on_source_changed: Callable[[str], None] | None = None,
     ) -> None:
         self.project_path = Path(project_path)
         self._broadcast = broadcast_fn
@@ -49,6 +56,7 @@ class DaemonFileSync:
         self._suppressed: dict[str, float] = {}  # rel_path -> suppress_until
         self._pending: dict[str, asyncio.TimerHandle] = {}  # rel_path -> debounce handle
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._on_source_changed = on_source_changed
 
     async def start(self, loop: asyncio.AbstractEventLoop) -> None:
         """Start watchdog observer on project directory."""
@@ -173,6 +181,8 @@ class DaemonFileSync:
                 self._suppress(rel_path)
                 abs_path.unlink()
                 self.log.debug(f"Deleted synced file: {rel_path}")
+                if self._on_source_changed and self._is_source_file(rel_path):
+                    self._on_source_changed(rel_path)
             return
 
         data_b64 = msg.get("data", "")
@@ -222,6 +232,17 @@ class DaemonFileSync:
                 pass
 
         self.log.debug(f"Wrote synced file: {rel_path} ({len(data)} bytes)")
+
+        # Notify if a byfrost source file changed (triggers daemon restart)
+        if self._on_source_changed and self._is_source_file(rel_path):
+            self._on_source_changed(rel_path)
+
+    @staticmethod
+    def _is_source_file(rel_path: str) -> bool:
+        """Check if a path is a byfrost Python source file."""
+        if not rel_path.endswith(".py"):
+            return False
+        return any(rel_path.startswith(prefix) for prefix in SOURCE_PATTERNS)
 
     # --- Initial sync: send all files to a newly connected client ---
 

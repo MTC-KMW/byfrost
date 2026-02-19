@@ -1,7 +1,9 @@
-"""Shared ignore logic for bridge file sync.
+"""Shared ignore logic for bridge file sync and git.
 
-Uses pathspec to match .gitignore-style patterns. Both the daemon and
-CLI file sync modules use this to decide which files to skip.
+Uses pathspec to match .gitignore-style patterns. Git-aware tools use
+the full .gitignore + defaults. File sync uses only defaults (build
+artifacts, caches) because the bridge syncs ALL project files - git is
+for version history, not transport (see byfrost-workflow-dynamics.md S8).
 """
 
 from __future__ import annotations
@@ -45,37 +47,28 @@ DEFAULT_IGNORE_PATTERNS = [
 # Binary assets larger than this are skipped.
 MAX_FILE_SIZE = 2 * 1024 * 1024
 
-# Agent team coordination directory that must always be synced even if
-# .gitignore excludes it. Uses gitignore negation syntax.
-# All coordination files live under byfrost/ (tasks/, compound/, pm/, etc.)
-SYNC_ALLOW_PATTERNS = [
-    "!byfrost/",
-]
-
-
 def load_ignore_spec(project_dir: Path, *, for_sync: bool = False) -> pathspec.PathSpec:
-    """Load ignore patterns from .gitignore + defaults.
+    """Load ignore patterns for file matching.
 
-    Reads .gitignore from project_dir (if it exists) and merges with
-    DEFAULT_IGNORE_PATTERNS. Returns a compiled PathSpec for matching.
+    When for_sync=False (default): reads .gitignore + DEFAULT_IGNORE_PATTERNS.
+    Used by git-aware tools like checksum validation.
 
-    When for_sync=True, appends negation patterns so that agent team
-    coordination directories are never ignored by the bridge file sync
-    (even though .gitignore correctly excludes them from git).
+    When for_sync=True: uses ONLY DEFAULT_IGNORE_PATTERNS (build artifacts,
+    caches, VCS internals). Skips .gitignore entirely because the bridge
+    syncs all project files - .gitignore is for git, not transport.
     """
     lines = list(DEFAULT_IGNORE_PATTERNS)
-    gitignore = project_dir / ".gitignore"
-    if gitignore.is_file():
-        try:
-            text = gitignore.read_text(encoding="utf-8", errors="replace")
-            for line in text.splitlines():
-                stripped = line.strip()
-                if stripped and not stripped.startswith("#"):
-                    lines.append(stripped)
-        except OSError:
-            pass
-    if for_sync:
-        lines.extend(SYNC_ALLOW_PATTERNS)
+    if not for_sync:
+        gitignore = project_dir / ".gitignore"
+        if gitignore.is_file():
+            try:
+                text = gitignore.read_text(encoding="utf-8", errors="replace")
+                for line in text.splitlines():
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#"):
+                        lines.append(stripped)
+            except OSError:
+                pass
     return pathspec.PathSpec.from_lines("gitignore", lines)
 
 
