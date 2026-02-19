@@ -7,6 +7,7 @@ import SwiftUI
 /// After setup, transitions to menu bar mode. The daemon keeps running
 /// when the app quits (via launchd). On relaunch, DaemonManager
 /// recovers the running PID.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusBarController: StatusBarController?
