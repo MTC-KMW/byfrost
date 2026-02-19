@@ -45,15 +45,11 @@ DEFAULT_IGNORE_PATTERNS = [
 # Binary assets larger than this are skipped.
 MAX_FILE_SIZE = 2 * 1024 * 1024
 
-# Agent team coordination directories that must always be synced even if
-# .gitignore excludes them. Uses gitignore negation syntax.
+# Agent team coordination directory that must always be synced even if
+# .gitignore excludes it. Uses gitignore negation syntax.
+# All coordination files live under byfrost/ (tasks/, compound/, pm/, etc.)
 SYNC_ALLOW_PATTERNS = [
     "!byfrost/",
-    "!compound/",
-    "!pm/",
-    "!qa/",
-    "!shared/",
-    "!tasks/",
 ]
 
 
