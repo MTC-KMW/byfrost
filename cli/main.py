@@ -738,7 +738,10 @@ async def _test_worker_connection(addresses: dict | None, port: int) -> str | No
     if not addresses:
         return None
 
-    ssl_ctx = TLSManager.get_client_ssl_context()
+    try:
+        ssl_ctx = TLSManager.get_client_ssl_context()
+    except Exception:
+        ssl_ctx = None  # Certs missing or invalid; try plaintext
 
     # Try addresses in priority order
     candidates = []

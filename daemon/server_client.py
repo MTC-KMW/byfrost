@@ -206,8 +206,9 @@ class ServerClient:
     async def _discover_pairing(self) -> None:
         """If pairing_id is not in auth.json, ask the server for it.
 
-        Called once on daemon startup. The device_id and device_token
-        are enough to look up the active pairing on the server.
+        Called on daemon startup and re-checked on each heartbeat until
+        a pairing is found. The device_id and device_token are enough
+        to look up the active pairing on the server.
         """
         if self._pairing_id:
             return  # Already known
@@ -271,7 +272,17 @@ class ServerClient:
             except Exception as e:
                 self.log.warning(f"Heartbeat failed: {e}")
                 delay = min(delay * 2, MAX_RETRY_BACKOFF)
-            await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+            # If not yet paired, re-check frequently (every 15s instead
+            # of 5min). Covers the case where daemon starts before
+            # controller runs `byfrost connect`.
+            if not self._pairing_id:
+                await self._discover_pairing()
+                if self._pairing_id:
+                    await self._fetch_credentials_if_needed()
+                await asyncio.sleep(15)
+            else:
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
 
     async def _send_heartbeat(self) -> None:
         """POST /devices/{device_id}/heartbeat with current addresses."""
