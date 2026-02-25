@@ -238,6 +238,14 @@ def validate_project_path(config: dict, log) -> None:
         # Fall through to auto-discovery
         log.info("Attempting auto-discovery as fallback...")
     else:
+        # Multi-project mode: default to home directory
+        from core.config import load_projects
+        projects = load_projects()
+        if projects:
+            config["project_path"] = str(Path.home())
+            log.info(f"Multi-project mode: default path is {Path.home()}")
+            return
+
         log.info("No MAC_PROJECT_PATH set, attempting auto-discovery...")
 
     discovered = discover_project_path(log)
@@ -251,10 +259,9 @@ def validate_project_path(config: dict, log) -> None:
         save_daemon_config(daemon_cfg)
         log.info("Saved project path to ~/.byfrost/daemon.json")
     else:
-        log.warning(
-            "No project found. Set MAC_PROJECT_PATH to the absolute path "
-            "of your project directory."
-        )
+        # Default to home as a safe fallback
+        config["project_path"] = str(Path.home())
+        log.info(f"No project found, defaulting to home: {Path.home()}")
 
 
 # ---------------------------------------------------------------------------
@@ -1049,10 +1056,10 @@ class ByfrostDaemon:
         projects[name] = project_path
         save_projects(projects)
 
-        # Update legacy project_path if not set
+        # Default project_path to home if not set (multi-project root)
         cfg = load_daemon_config()
         if not cfg.get("project_path"):
-            cfg["project_path"] = project_path
+            cfg["project_path"] = str(Path.home())
             save_daemon_config(cfg)
 
         # Hot-add file sync (no restart needed)

@@ -1261,10 +1261,10 @@ def _do_add_project(path_arg: str, name_arg: str | None = None) -> int:
     projects[name] = str(project)
     save_projects(projects)
 
-    # Also update legacy project_path for backwards compat
+    # Default project_path to home if not set (multi-project root)
     cfg = load_daemon_config()
     if not cfg.get("project_path"):
-        cfg["project_path"] = str(project)
+        cfg["project_path"] = str(Path.home())
         save_daemon_config(cfg)
 
     _print_status(f"Project registered: {name} -> {project}")
