@@ -27,10 +27,11 @@ final class CLIRunner: ObservableObject {
     /// Checks common macOS install locations, then falls back to PATH.
     static func findByfrostCLI() -> String? {
         let candidates = [
-            "/usr/local/bin/byfrost",
-            "/opt/homebrew/bin/byfrost",
-            NSHomeDirectory() + "/.local/bin/byfrost",
+            // Prefer venv install (development) over system installs
             NSHomeDirectory() + "/byfrost/.venv/bin/byfrost",
+            NSHomeDirectory() + "/.local/bin/byfrost",
+            "/opt/homebrew/bin/byfrost",
+            "/usr/local/bin/byfrost",
         ]
         for path in candidates {
             if FileManager.default.isExecutableFile(atPath: path) {
