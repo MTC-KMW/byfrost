@@ -68,6 +68,18 @@ struct MenuBarView: View {
                     daemonManager.restart()
                 }
                 .disabled(daemonManager.state == .stopped)
+
+                Spacer()
+
+                Button("Logs") {
+                    let logDir = DaemonConfig.logDir.path
+                    let stderr = "\(logDir)/launchd-stderr.log"
+                    if FileManager.default.fileExists(atPath: stderr) {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: stderr))
+                    } else {
+                        NSWorkspace.shared.open(DaemonConfig.logDir)
+                    }
+                }
             }
 
             Divider()
