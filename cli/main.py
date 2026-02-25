@@ -187,16 +187,17 @@ class ByfrostClient:
         ws = await self._connect()
         task_id = os.urandom(6).hex()
 
-        msg = self._sign({
+        payload = {
             "type": "task.submit",
             "task_id": task_id,
             "prompt": prompt,
             "priority": priority,
-        })
+        }
         if project_path:
-            msg["project_path"] = project_path
+            payload["project_path"] = project_path
         if tools:
-            msg["allowed_tools"] = tools
+            payload["allowed_tools"] = tools
+        msg = self._sign(payload)
 
         await ws.send(json.dumps(msg))
 
@@ -251,11 +252,10 @@ class ByfrostClient:
     async def get_status(self, task_id=None):
         """Get daemon or task status."""
         ws = await self._connect()
-        msg = self._sign({
-            "type": "task.status",
-        })
+        payload: dict[str, Any] = {"type": "task.status"}
         if task_id:
-            msg["task_id"] = task_id
+            payload["task_id"] = task_id
+        msg = self._sign(payload)
 
         await ws.send(json.dumps(msg))
 
