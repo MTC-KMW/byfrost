@@ -13,6 +13,7 @@ struct DaemonRichState: Codable {
     let startedAt: Double?
     let state: String?
     let projectPath: String?
+    let projects: [String: String]?
     let clients: Int?
     let activeTask: ActiveTaskInfo?
     let queueSize: Int?
@@ -40,6 +41,7 @@ struct DaemonRichState: Codable {
         case startedAt = "started_at"
         case state
         case projectPath = "project_path"
+        case projects
         case clients
         case activeTask = "active_task"
         case queueSize = "queue_size"
@@ -72,6 +74,7 @@ final class DaemonManager: ObservableObject {
     @Published var activeTaskPreview: String?
     @Published var activeTaskRuntime: TimeInterval?
     @Published var queueSize: Int = 0
+    @Published var projects: [String: String] = [:]
     @Published var uptime: TimeInterval?
     @Published var lastError: String?
     @Published var daemonVersion: String?
@@ -323,6 +326,7 @@ final class DaemonManager: ObservableObject {
             // Derive convenience properties
             clientCount = decoded.clients ?? 0
             queueSize = decoded.queueSize ?? 0
+            projects = decoded.projects ?? [:]
             lastError = decoded.lastError
             daemonVersion = decoded.version
 

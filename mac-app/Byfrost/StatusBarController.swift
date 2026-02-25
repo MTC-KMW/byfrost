@@ -20,7 +20,6 @@ final class StatusBarController {
         )
 
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 320, height: 400)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(
             rootView: MenuBarView(daemonManager: daemonManager)

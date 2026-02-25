@@ -37,6 +37,12 @@ struct MenuBarView: View {
                 Divider()
             }
 
+            // Registered projects
+            if !daemonManager.projects.isEmpty {
+                projectsSection
+                Divider()
+            }
+
             // Status details
             statusSection
 
@@ -87,6 +93,34 @@ struct MenuBarView: View {
         .font(.system(.caption, design: .monospaced))
     }
 
+    // MARK: - Projects Section
+
+    private var projectsSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "folder.fill")
+                    .foregroundColor(.blue)
+                Text("Projects")
+                    .font(.subheadline.bold())
+            }
+            ForEach(
+                daemonManager.projects.sorted(by: { $0.key < $1.key }),
+                id: \.key
+            ) { name, path in
+                HStack {
+                    Text(name)
+                        .font(.system(.caption, design: .monospaced))
+                    Spacer()
+                    Text(shortenPath(path))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+            }
+        }
+    }
+
     // MARK: - Active Task Section
 
     private func activeTaskSection(preview: String) -> some View {
@@ -115,9 +149,6 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 4) {
             if let pid = daemonManager.pid {
                 infoRow("PID", "\(pid)")
-            }
-            if !daemonManager.config.projectPath.isEmpty {
-                infoRow("Project", daemonManager.config.projectPath)
             }
             infoRow("Port", "\(daemonManager.config.port)")
             if daemonManager.queueSize > 0 {
@@ -163,6 +194,14 @@ struct MenuBarView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+    }
+
+    private func shortenPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
