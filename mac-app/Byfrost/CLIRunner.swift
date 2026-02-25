@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Runs `byfrost` CLI commands as subprocesses.
@@ -183,10 +184,18 @@ final class CLIRunner: ObservableObject {
 
     /// Check for required tools. Returns availability of each.
     func checkPrerequisites() -> (claude: Bool, tmux: Bool) {
+        let all = checkAllPrerequisites()
+        return (claude: all.claude, tmux: all.tmux)
+    }
+
+    /// Check all tools in the dependency chain.
+    func checkAllPrerequisites() -> (brew: Bool, node: Bool, claude: Bool, tmux: Bool) {
+        let brew = Self.commandExists("brew")
+        let node = Self.commandExists("node")
         let claude = Self.commandExists("claude")
             || Self.commandExists("claude-code")
         let tmux = Self.commandExists("tmux")
-        return (claude: claude, tmux: tmux)
+        return (brew: brew, node: node, claude: claude, tmux: tmux)
     }
 
     /// Check if a command exists at common macOS paths or in PATH.
@@ -203,6 +212,76 @@ final class CLIRunner: ObservableObject {
         // Check PATH via which
         let result = shell("which", name)
         return result.exitCode == 0
+    }
+
+    // MARK: - Install Tools
+
+    /// Open Terminal with Homebrew install script (interactive - needs password).
+    func installHomebrew() {
+        let script = "/bin/bash -c \\\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\\""
+        let source = """
+        tell application "Terminal"
+            activate
+            do script "\(script)"
+        end tell
+        """
+        if let appleScript = NSAppleScript(source: source) {
+            appleScript.executeAndReturnError(nil)
+        }
+    }
+
+    /// Install a tool asynchronously via a shell command.
+    func installTool(_ command: String, _ arguments: [String]) async -> Result {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = Self.shell(command, arguments)
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    /// Find brew executable path.
+    static func findBrew() -> String? {
+        for path in ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"] {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        return nil
+    }
+
+    /// Find npm executable path.
+    static func findNpm() -> String? {
+        for path in ["/opt/homebrew/bin/npm", "/usr/local/bin/npm"] {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        return nil
+    }
+
+    /// Install Node.js via Homebrew.
+    func installNode() async -> Result {
+        guard let brew = Self.findBrew() else {
+            return Result(exitCode: 1, output: "", error: "Homebrew not found")
+        }
+        return await installTool(brew, ["install", "node"])
+    }
+
+    /// Install tmux via Homebrew.
+    func installTmux() async -> Result {
+        guard let brew = Self.findBrew() else {
+            return Result(exitCode: 1, output: "", error: "Homebrew not found")
+        }
+        return await installTool(brew, ["install", "tmux"])
+    }
+
+    /// Install Claude Code via npm.
+    func installClaude() async -> Result {
+        guard let npm = Self.findNpm() else {
+            return Result(exitCode: 1, output: "", error: "npm not found")
+        }
+        return await installTool(npm, ["install", "-g", "@anthropic-ai/claude-code"])
     }
 
     // MARK: - Shell Helpers

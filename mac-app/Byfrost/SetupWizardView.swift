@@ -39,9 +39,12 @@ final class WizardState: ObservableObject {
     @Published var username: String?
 
     // Prerequisites
+    @Published var brewFound = false
+    @Published var nodeFound = false
     @Published var claudeFound = false
     @Published var tmuxFound = false
     @Published var prereqsChecked = false
+    @Published var installingTool: String?  // "brew", "node", "tmux", "claude"
 
     // Project config
     @Published var projectPath: String = ""
@@ -141,10 +144,47 @@ final class WizardState: ObservableObject {
     // MARK: - Prerequisites
 
     func checkPrerequisites() {
-        let result = cliRunner.checkPrerequisites()
+        let result = cliRunner.checkAllPrerequisites()
+        brewFound = result.brew
+        nodeFound = result.node
         claudeFound = result.claude
         tmuxFound = result.tmux
         prereqsChecked = true
+    }
+
+    func installBrew() {
+        cliRunner.installHomebrew()
+        // Interactive - user clicks Re-check when done
+    }
+
+    func installNode() {
+        guard installingTool == nil else { return }
+        installingTool = "node"
+        Task {
+            _ = await cliRunner.installNode()
+            installingTool = nil
+            checkPrerequisites()
+        }
+    }
+
+    func installTmux() {
+        guard installingTool == nil else { return }
+        installingTool = "tmux"
+        Task {
+            _ = await cliRunner.installTmux()
+            installingTool = nil
+            checkPrerequisites()
+        }
+    }
+
+    func installClaude() {
+        guard installingTool == nil else { return }
+        installingTool = "claude"
+        Task {
+            _ = await cliRunner.installClaude()
+            installingTool = nil
+            checkPrerequisites()
+        }
     }
 
     // MARK: - Project Config
@@ -263,7 +303,7 @@ struct SetupWizardView: View {
             navigationButtons
                 .padding(16)
         }
-        .frame(width: 480, height: 520)
+        .frame(width: 520, height: 560)
     }
 
     // MARK: - Step Indicator
@@ -392,15 +432,44 @@ struct SetupWizardView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 prereqRow(
-                    name: "Claude Code",
-                    found: wizard.claudeFound,
-                    installHint: "npm install -g @anthropic-ai/claude-code"
-                )
+                    name: "Homebrew",
+                    found: wizard.brewFound,
+                    hint: "Required for installing other tools",
+                    canInstall: true,
+                    isInstalling: wizard.installingTool == "brew"
+                ) {
+                    wizard.installBrew()
+                }
+
+                prereqRow(
+                    name: "Node.js",
+                    found: wizard.nodeFound,
+                    hint: wizard.brewFound ? "brew install node" : "Install Homebrew first",
+                    canInstall: wizard.brewFound,
+                    isInstalling: wizard.installingTool == "node"
+                ) {
+                    wizard.installNode()
+                }
+
                 prereqRow(
                     name: "tmux",
                     found: wizard.tmuxFound,
-                    installHint: "brew install tmux"
-                )
+                    hint: wizard.brewFound ? "brew install tmux" : "Install Homebrew first",
+                    canInstall: wizard.brewFound,
+                    isInstalling: wizard.installingTool == "tmux"
+                ) {
+                    wizard.installTmux()
+                }
+
+                prereqRow(
+                    name: "Claude Code",
+                    found: wizard.claudeFound,
+                    hint: wizard.nodeFound ? "npm install -g @anthropic-ai/claude-code" : "Install Node.js first",
+                    canInstall: wizard.nodeFound,
+                    isInstalling: wizard.installingTool == "claude"
+                ) {
+                    wizard.installClaude()
+                }
             }
             .padding()
             .background(Color.gray.opacity(0.05))
@@ -418,21 +487,48 @@ struct SetupWizardView: View {
         }
     }
 
-    private func prereqRow(name: String, found: Bool, installHint: String) -> some View {
+    private func prereqRow(
+        name: String,
+        found: Bool,
+        hint: String,
+        canInstall: Bool,
+        isInstalling: Bool,
+        onInstall: @escaping () -> Void
+    ) -> some View {
         HStack {
             Image(systemName: found ? "checkmark.circle.fill" : "xmark.circle.fill")
                 .foregroundColor(found ? .green : .red)
-            VStack(alignment: .leading) {
-                Text(name)
-                    .font(.headline)
-                if !found {
-                    Text(installHint)
-                        .font(.system(.caption, design: .monospaced))
+
+            Text(name)
+                .font(.headline)
+                .frame(width: 100, alignment: .leading)
+
+            if found {
+                Spacer()
+            } else if isInstalling {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Installing...")
+                        .font(.caption)
                         .foregroundColor(.secondary)
-                        .textSelection(.enabled)
+                }
+                Spacer()
+            } else {
+                Text(hint)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .textSelection(.enabled)
+
+                Spacer()
+
+                if canInstall {
+                    Button("Install") {
+                        onInstall()
+                    }
+                    .controlSize(.small)
                 }
             }
-            Spacer()
         }
     }
 
