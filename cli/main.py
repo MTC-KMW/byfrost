@@ -1183,30 +1183,72 @@ def _do_daemon(action: str) -> int:
 def _do_set_project(path_arg: str | None) -> int:
     """Set the daemon's project path (persisted to ~/.byfrost/daemon.json).
 
-    Returns 0 on success, 1 on failure.
+    Legacy command - now an alias for add-project. Returns 0 on success.
     """
-    from core.config import load_daemon_config, save_daemon_config
-
     if not path_arg:
-        cfg = load_daemon_config()
-        current = cfg.get("project_path")
-        if current:
-            _print_status(f"Project path: {current}")
-        else:
-            _print_status("No project path set.")
-            _print_status("Usage: byfrost daemon set-project /path/to/project")
-        return 0
+        return _do_list_projects()
+    return _do_add_project(path_arg)
+
+
+def _do_add_project(path_arg: str, name_arg: str | None = None) -> int:
+    """Register a project with the daemon (multi-project support)."""
+    from core.config import load_daemon_config, load_projects, save_daemon_config, save_projects
 
     project = Path(path_arg).resolve()
     if not project.is_dir():
         _print_error(f"Not a directory: {project}")
         return 1
 
+    name = name_arg or project.name
+    projects = load_projects()
+    projects[name] = str(project)
+    save_projects(projects)
+
+    # Also update legacy project_path for backwards compat
     cfg = load_daemon_config()
-    cfg["project_path"] = str(project)
-    save_daemon_config(cfg)
-    _print_status(f"Project path set: {project}")
+    if not cfg.get("project_path"):
+        cfg["project_path"] = str(project)
+        save_daemon_config(cfg)
+
+    _print_status(f"Project registered: {name} -> {project}")
     _print_status("Restart the daemon to apply: byfrost daemon restart")
+    return 0
+
+
+def _do_remove_project(name_arg: str) -> int:
+    """Remove a project from the daemon registry."""
+    from core.config import load_projects, save_projects
+
+    projects = load_projects()
+    if name_arg not in projects:
+        _print_error(f"Project not found: {name_arg}")
+        available = list(projects.keys())
+        if available:
+            _print_status(f"Available: {', '.join(available)}")
+        return 1
+
+    del projects[name_arg]
+    save_projects(projects)
+    _print_status(f"Project removed: {name_arg}")
+    _print_status("Restart the daemon to apply: byfrost daemon restart")
+    return 0
+
+
+def _do_list_projects() -> int:
+    """List all registered projects."""
+    from core.config import load_projects
+
+    projects = load_projects()
+    if not projects:
+        _print_status("No projects registered.")
+        _print_status("Usage: byfrost daemon add-project /path/to/project")
+        return 0
+
+    _print_status("Registered projects:")
+    for name, path in projects.items():
+        exists = Path(path).is_dir()
+        marker = "" if exists else " (NOT FOUND)"
+        print(f"  {name}: {path}{marker}")
     return 0
 
 
@@ -1253,10 +1295,14 @@ def main():
     p_daemon = sub.add_parser("daemon", help="Manage the byfrost daemon service")
     p_daemon.add_argument(
         "action",
-        choices=["install", "uninstall", "start", "stop", "restart", "status", "set-project"],
+        choices=[
+            "install", "uninstall", "start", "stop", "restart", "status",
+            "set-project", "add-project", "remove-project", "list-projects",
+        ],
         help="Daemon action",
     )
-    p_daemon.add_argument("path", nargs="?", help="Project path (for set-project)")
+    p_daemon.add_argument("path", nargs="?", help="Project path or name")
+    p_daemon.add_argument("--name", help="Project alias (for add-project)")
 
     # byfrost init / uninit
     sub.add_parser("init", help="Set up agent team in current project")
@@ -1337,8 +1383,24 @@ def main():
     if args.command == "logout":
         sys.exit(asyncio.run(_do_logout()))
     if args.command == "daemon":
-        if args.action == "set-project":
-            sys.exit(_do_set_project(getattr(args, "path", None)))
+        if args.action in ("set-project", "add-project"):
+            path = getattr(args, "path", None)
+            name = getattr(args, "name", None)
+            if args.action == "set-project":
+                sys.exit(_do_set_project(path))
+            else:
+                if not path:
+                    _print_error("Usage: byfrost daemon add-project /path [--name alias]")
+                    sys.exit(1)
+                sys.exit(_do_add_project(path, name))
+        elif args.action == "remove-project":
+            name = getattr(args, "path", None)  # reuse 'path' positional
+            if not name:
+                _print_error("Usage: byfrost daemon remove-project <name>")
+                sys.exit(1)
+            sys.exit(_do_remove_project(name))
+        elif args.action == "list-projects":
+            sys.exit(_do_list_projects())
         else:
             sys.exit(_do_daemon(args.action))
     if args.command == "init":
@@ -1368,10 +1430,12 @@ def main():
     priority_map = {"normal": 0, "high": 1, "urgent": 2}
 
     if args.command == "send":
+        # Auto-detect project from cwd if not explicitly given
+        project = args.project or Path.cwd().resolve().name
         exit_code = asyncio.run(client.send_task(
             args.prompt,
             priority=priority_map.get(args.priority, 0),
-            project_path=args.project,
+            project_path=project,
             tools=args.tools,
         ))
         sys.exit(exit_code or 0)

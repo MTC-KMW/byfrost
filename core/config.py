@@ -48,6 +48,38 @@ def save_daemon_config(config: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Project registry (multi-project support)
+# ---------------------------------------------------------------------------
+
+
+def load_projects() -> dict[str, str]:
+    """Load project registry from daemon.json.
+
+    Returns dict of project_name -> local_path. Auto-migrates legacy
+    single-project configs into the projects dict.
+    """
+    cfg = load_daemon_config()
+    projects: dict[str, str] = cfg.get("projects", {})
+
+    # Auto-migrate: single project_path -> projects dict
+    # Only triggers when "projects" key is absent (not after manual removal)
+    if "projects" not in cfg and cfg.get("project_path"):
+        name = Path(cfg["project_path"]).name
+        projects[name] = cfg["project_path"]
+        cfg["projects"] = projects
+        save_daemon_config(cfg)
+
+    return projects
+
+
+def save_projects(projects: dict[str, str]) -> None:
+    """Save project registry to daemon.json."""
+    cfg = load_daemon_config()
+    cfg["projects"] = projects
+    save_daemon_config(cfg)
+
+
+# ---------------------------------------------------------------------------
 # Shared config helpers
 # ---------------------------------------------------------------------------
 

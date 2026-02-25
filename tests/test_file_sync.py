@@ -497,10 +497,6 @@ class TestProcessManagement:
     def test_start_writes_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from cli import file_sync
 
-        pid_file = tmp_path / "sync.pid"
-        log_file = tmp_path / "sync.log"
-        monkeypatch.setattr(file_sync, "PID_FILE", pid_file)
-        monkeypatch.setattr(file_sync, "LOG_FILE", log_file)
         monkeypatch.setattr(file_sync, "BRIDGE_DIR", tmp_path)
 
         class FakeProc:
@@ -510,38 +506,38 @@ class TestProcessManagement:
             "subprocess.Popen", lambda *a, **kw: FakeProc()
         )
 
-        result = file_sync.start_sync(tmp_path)
+        result = file_sync.start_sync(tmp_path, "testproj")
         assert result == 0
+        pid_file = tmp_path / "sync.testproj.pid"
         assert pid_file.exists()
         assert pid_file.read_text() == "12345"
 
     def test_stop_removes_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from cli import file_sync
 
-        pid_file = tmp_path / "sync.pid"
+        monkeypatch.setattr(file_sync, "BRIDGE_DIR", tmp_path)
+        pid_file = tmp_path / "sync.testproj.pid"
         pid_file.write_text("99999")
-        monkeypatch.setattr(file_sync, "PID_FILE", pid_file)
 
-        result = file_sync.stop_sync()
+        result = file_sync.stop_sync("testproj")
         assert result == 0
         assert not pid_file.exists()
 
     def test_status_not_running(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from cli import file_sync
 
-        pid_file = tmp_path / "sync.pid"
-        monkeypatch.setattr(file_sync, "PID_FILE", pid_file)
+        monkeypatch.setattr(file_sync, "BRIDGE_DIR", tmp_path)
 
-        result = file_sync.sync_status()
+        result = file_sync.sync_status("testproj")
         assert result == 1
 
     def test_status_stale_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from cli import file_sync
 
-        pid_file = tmp_path / "sync.pid"
+        monkeypatch.setattr(file_sync, "BRIDGE_DIR", tmp_path)
+        pid_file = tmp_path / "sync.testproj.pid"
         pid_file.write_text("99999")
-        monkeypatch.setattr(file_sync, "PID_FILE", pid_file)
 
-        result = file_sync.sync_status()
+        result = file_sync.sync_status("testproj")
         assert result == 1
         assert not pid_file.exists()

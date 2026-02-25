@@ -47,20 +47,29 @@ RECONNECT_MIN = 1       # initial delay (seconds)
 RECONNECT_MAX = 60      # cap (seconds)
 RECONNECT_FACTOR = 2    # exponential multiplier
 
-# PID file for the sync process
+# Legacy PID/log files (single-project compat)
 PID_FILE = BRIDGE_DIR / "sync.pid"
-
-# Log file
 LOG_FILE = BRIDGE_DIR / "sync.log"
 
 
-def _setup_logger() -> logging.Logger:
+def _pid_file(project: str) -> Path:
+    """Per-project PID file."""
+    return BRIDGE_DIR / f"sync.{project}.pid"
+
+
+def _log_file(project: str) -> Path:
+    """Per-project log file."""
+    return BRIDGE_DIR / f"sync.{project}.log"
+
+
+def _setup_logger(project: str = "") -> logging.Logger:
     """Set up logging for the sync process."""
     BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
-    logger = logging.getLogger("byfrost.sync")
+    log_path = _log_file(project) if project else LOG_FILE
+    logger = logging.getLogger(f"byfrost.sync.{project}" if project else "byfrost.sync")
     logger.setLevel(logging.DEBUG)
 
-    handler = logging.FileHandler(LOG_FILE)
+    handler = logging.FileHandler(log_path)
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     )
@@ -117,8 +126,10 @@ class SyncClient:
 
     def __init__(
         self, project_dir: Path, config: dict, logger: logging.Logger,
+        project_name: str = "",
     ) -> None:
         self.project_dir = project_dir
+        self.project_name = project_name or project_dir.name
         self.config = config
         self.log = logger
         self._ignore_spec = load_ignore_spec(self.project_dir, for_sync=True)
@@ -180,6 +191,13 @@ class SyncClient:
         )
         self.log.info(f"Connected to daemon at {uri}")
 
+        # Register this sync client's project with the daemon
+        register_msg = self._sign({
+            "type": "sync.register", "project": self.project_name,
+        })
+        await self._ws.send(json.dumps(register_msg))
+        self.log.info(f"Registered project: {self.project_name}")
+
         # Send our local files for initial sync
         await self._send_manifest()
 
@@ -237,7 +255,10 @@ class SyncClient:
             return
 
         if deleted:
-            msg = self._sign({"type": "file.changed", "path": rel_path, "deleted": True})
+            msg = self._sign({
+                "type": "file.changed", "project": self.project_name,
+                "path": rel_path, "deleted": True,
+            })
             try:
                 await ws.send(json.dumps(msg))
             except (websockets.exceptions.ConnectionClosed, OSError):
@@ -269,6 +290,7 @@ class SyncClient:
         checksum = hashlib.sha256(data).hexdigest()
         msg = self._sign({
             "type": "file.sync",
+            "project": self.project_name,
             "path": rel_path,
             "data": base64.b64encode(data).decode("ascii"),
             "checksum": checksum,
@@ -285,6 +307,11 @@ class SyncClient:
 
     async def _handle_inbound_sync(self, msg: dict) -> None:
         """Handle incoming file.sync or file.changed message."""
+        # Filter by project - skip messages for other projects
+        msg_project = msg.get("project", "")
+        if msg_project and msg_project != self.project_name:
+            return
+
         rel_path = msg.get("path", "")
         if not self._validate_path(rel_path):
             self.log.warning(f"Rejected invalid sync path: {rel_path}")
@@ -496,16 +523,17 @@ class _SyncEventHandler(FileSystemEventHandler):
 
 # --- Process management ---
 
-def _run_sync_foreground(project_dir: Path) -> None:
+def _run_sync_foreground(project_dir: Path, project_name: str = "") -> None:
     """Run sync client in foreground (called by background process)."""
-    logger = _setup_logger()
+    name = project_name or project_dir.name
+    logger = _setup_logger(name)
     config = _load_config()
 
     if not config.get("host") or config["host"] == "localhost":
         logger.error("No worker host configured. Run 'byfrost connect' first.")
         sys.exit(1)
 
-    client = SyncClient(project_dir, config, logger)
+    client = SyncClient(project_dir, config, logger, project_name=name)
 
     def _handle_sigterm(*_: object) -> None:
         client.stop()
@@ -518,76 +546,127 @@ def _run_sync_foreground(project_dir: Path) -> None:
         client.stop()
 
 
-def start_sync(project_dir: Path) -> int:
+def start_sync(project_dir: Path, project_name: str = "") -> int:
     """Start the sync process in background. Returns 0 on success."""
     BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
+    name = project_name or project_dir.name
+    pid_path = _pid_file(name)
 
     # Check if already running
-    if PID_FILE.exists():
+    if pid_path.exists():
         try:
-            pid = int(PID_FILE.read_text().strip())
+            pid = int(pid_path.read_text().strip())
             os.kill(pid, 0)  # Check if alive
-            print(f"[byfrost] Sync already running (PID {pid})")
+            print(f"[byfrost] Sync already running for '{name}' (PID {pid})")
             return 0
         except (ProcessLookupError, ValueError):
-            PID_FILE.unlink(missing_ok=True)
+            pid_path.unlink(missing_ok=True)
 
     # Launch as background subprocess
     proc = subprocess.Popen(
-        [sys.executable, "-m", "cli.file_sync", str(project_dir)],
+        [sys.executable, "-m", "cli.file_sync", str(project_dir), name],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    PID_FILE.write_text(str(proc.pid))
-    print(f"[byfrost] Sync started (PID {proc.pid})")
-    print(f"[byfrost] Log: {LOG_FILE}")
+    pid_path.write_text(str(proc.pid))
+    print(f"[byfrost] Sync started for '{name}' (PID {proc.pid})")
+    print(f"[byfrost] Log: {_log_file(name)}")
     return 0
 
 
-def stop_sync() -> int:
-    """Stop the sync process. Returns 0 on success."""
-    if not PID_FILE.exists():
-        print("[byfrost] Sync is not running")
-        return 1
+def stop_sync(project_name: str = "") -> int:
+    """Stop sync process(es). If no project given, stop all."""
+    if project_name:
+        return _stop_one(project_name)
 
+    # Stop all running syncs
+    found = False
+    for pid_path in BRIDGE_DIR.glob("sync.*.pid"):
+        name = pid_path.stem.split(".", 1)[1]  # sync.crm.pid -> crm
+        _stop_one(name)
+        found = True
+    # Also check legacy PID file
+    if PID_FILE.exists():
+        _stop_one_file(PID_FILE, "default")
+        found = True
+    if not found:
+        print("[byfrost] No sync processes running")
+        return 1
+    return 0
+
+
+def _stop_one(project_name: str) -> int:
+    """Stop a single project's sync process."""
+    return _stop_one_file(_pid_file(project_name), project_name)
+
+
+def _stop_one_file(pid_path: Path, label: str) -> int:
+    """Stop a sync process by PID file."""
+    if not pid_path.exists():
+        print(f"[byfrost] Sync not running for '{label}'")
+        return 1
     try:
-        pid = int(PID_FILE.read_text().strip())
+        pid = int(pid_path.read_text().strip())
         os.kill(pid, signal.SIGTERM)
-        print(f"[byfrost] Sync stopped (PID {pid})")
+        print(f"[byfrost] Sync stopped for '{label}' (PID {pid})")
     except (ProcessLookupError, ValueError):
-        print("[byfrost] Sync process not found (stale PID file)")
+        print(f"[byfrost] Sync process not found for '{label}' (stale PID file)")
     finally:
-        PID_FILE.unlink(missing_ok=True)
+        pid_path.unlink(missing_ok=True)
     return 0
 
 
-def sync_status() -> int:
-    """Check sync process status. Returns 0 if running, 1 if not."""
-    if not PID_FILE.exists():
-        print("[byfrost] Sync is not running")
-        return 1
+def sync_status(project_name: str = "") -> int:
+    """Check sync process status. If no project given, show all."""
+    if project_name:
+        return _status_one(project_name)
 
+    # Show status for all running syncs
+    found = False
+    for pid_path in sorted(BRIDGE_DIR.glob("sync.*.pid")):
+        name = pid_path.stem.split(".", 1)[1]
+        _status_one(name)
+        found = True
+    # Check legacy PID
+    if PID_FILE.exists():
+        _status_one_file(PID_FILE, "default")
+        found = True
+    if not found:
+        print("[byfrost] No sync processes running")
+        return 1
+    return 0
+
+
+def _status_one(project_name: str) -> int:
+    """Check status of a single project's sync."""
+    return _status_one_file(_pid_file(project_name), project_name)
+
+
+def _status_one_file(pid_path: Path, label: str) -> int:
+    """Check sync status by PID file."""
+    if not pid_path.exists():
+        return 1
     try:
-        pid = int(PID_FILE.read_text().strip())
+        pid = int(pid_path.read_text().strip())
         os.kill(pid, 0)
-        print(f"[byfrost] Sync is running (PID {pid})")
+        print(f"[byfrost] Sync running for '{label}' (PID {pid})")
         return 0
     except (ProcessLookupError, ValueError):
-        PID_FILE.unlink(missing_ok=True)
-        print("[byfrost] Sync is not running (stale PID file removed)")
+        pid_path.unlink(missing_ok=True)
         return 1
 
 
 def run_sync_command(action: str, project_dir: Path) -> int:
     """Dispatch sync subcommand. Returns exit code."""
+    project_name = project_dir.name
     try:
         if action == "start":
-            return start_sync(project_dir)
+            return start_sync(project_dir, project_name)
         elif action == "stop":
-            return stop_sync()
+            return stop_sync(project_name)
         elif action == "status":
-            return sync_status()
+            return sync_status()  # Always show all
         else:
             print(f"[byfrost] Unknown sync action: {action}")
             return 1
@@ -595,9 +674,11 @@ def run_sync_command(action: str, project_dir: Path) -> int:
         return 130
 
 
-# Allow running as a module: python -m cli.file_sync /path/to/project
+# Allow running as a module: python -m cli.file_sync <project_dir> [project_name]
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python -m cli.file_sync <project_dir>")
+        print("Usage: python -m cli.file_sync <project_dir> [project_name]")
         sys.exit(1)
-    _run_sync_foreground(Path(sys.argv[1]))
+    proj_dir = Path(sys.argv[1])
+    proj_name = sys.argv[2] if len(sys.argv) > 2 else ""
+    _run_sync_foreground(proj_dir, proj_name)

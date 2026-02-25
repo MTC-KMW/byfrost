@@ -64,7 +64,7 @@ class TestSetProjectCommand:
         code = _do_set_project(None)
         assert code == 0
         out = capsys.readouterr().out
-        assert "No project path set" in out
+        assert "No projects registered" in out
 
     def test_saves_valid_path(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from cli.main import _do_set_project
@@ -76,7 +76,7 @@ class TestSetProjectCommand:
         loaded = load_daemon_config()
         assert loaded["project_path"] == str(project)
         out = capsys.readouterr().out
-        assert "Project path set" in out
+        assert "Project registered" in out
 
     def test_rejects_nonexistent_path(self, capsys: pytest.CaptureFixture[str]) -> None:
         from cli.main import _do_set_project

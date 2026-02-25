@@ -46,8 +46,10 @@ class DaemonFileSync:
         send_fn: Callable[..., Coroutine[Any, Any, None]],
         logger: logging.Logger,
         on_source_changed: Callable[[str], None] | None = None,
+        project_name: str = "",
     ) -> None:
         self.project_path = Path(project_path)
+        self.project_name = project_name or self.project_path.name
         self._broadcast = broadcast_fn
         self._send = send_fn
         self.log = logger
@@ -113,6 +115,7 @@ class DaemonFileSync:
         if deleted:
             try:
                 await self._broadcast("file.changed", {
+                    "project": self.project_name,
                     "path": rel_path,
                     "deleted": True,
                 })
@@ -145,6 +148,7 @@ class DaemonFileSync:
         checksum = hashlib.sha256(data).hexdigest()
         try:
             await self._broadcast("file.sync", {
+                "project": self.project_name,
                 "path": rel_path,
                 "data": base64.b64encode(data).decode("ascii"),
                 "checksum": checksum,
@@ -159,6 +163,11 @@ class DaemonFileSync:
 
     async def handle_file_sync(self, ws: Any, msg: dict, source: str = "") -> None:
         """Handle incoming file.sync or file.changed message."""
+        # Filter by project - skip if message is for a different project
+        msg_project = msg.get("project", "")
+        if msg_project and msg_project != self.project_name:
+            return  # Another DaemonFileSync instance will handle it
+
         rel_path = msg.get("path", "")
         if not self._validate_path(rel_path):
             self.log.warning(f"Rejected invalid sync path: {rel_path}")
@@ -285,6 +294,7 @@ class DaemonFileSync:
             checksum = hashlib.sha256(data).hexdigest()
             try:
                 await self._send(ws, "file.sync", {
+                    "project": self.project_name,
                     "path": rel,
                     "data": base64.b64encode(data).decode("ascii"),
                     "checksum": checksum,

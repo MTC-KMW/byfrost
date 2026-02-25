@@ -635,15 +635,79 @@ class ByfrostDaemon:
             config, logger, on_secret_rotated=self._refresh_signers,
         )
 
-        # File sync (all project files, bidirectional)
+        # File sync (multi-project, bidirectional)
+        from core.config import load_projects
         from daemon.file_sync import DaemonFileSync
-        self.file_sync = DaemonFileSync(
-            project_path=config.get("project_path", ""),
-            broadcast_fn=self._broadcast,
-            send_fn=self._send,
-            logger=logger,
-            on_source_changed=self._schedule_restart,
-        )
+        projects = load_projects()
+        # Fallback: use single project_path if no projects registered
+        if not projects and config.get("project_path"):
+            name = Path(config["project_path"]).name
+            projects[name] = config["project_path"]
+        self._file_syncs: dict[str, DaemonFileSync] = {}
+        for name, path in projects.items():
+            self._file_syncs[name] = DaemonFileSync(
+                project_path=path,
+                project_name=name,
+                broadcast_fn=self._broadcast,
+                send_fn=self._send,
+                logger=logger,
+                on_source_changed=self._schedule_restart,
+            )
+
+    @property
+    def file_sync(self):  # type: ignore[return]
+        """Default file sync (first registered project, for backwards compat)."""
+        if self._file_syncs:
+            return next(iter(self._file_syncs.values()))
+        return None
+
+    async def _handle_file_sync(self, ws, msg: dict, source: str = "") -> None:
+        """Route file.sync/file.changed to the correct project's sync."""
+        project = msg.get("project", "")
+        if not project and self._file_syncs:
+            # Backwards compat: no project field -> default project
+            project = next(iter(self._file_syncs))
+        sync = self._file_syncs.get(project)
+        if sync:
+            await sync.handle_file_sync(ws, msg, source)
+        else:
+            self.log.warning(
+                f"No sync for project '{project}' from {source}"
+            )
+
+    async def _handle_sync_register(
+        self, ws, msg: dict, source: str = "",
+    ) -> None:
+        """Handle sync.register - send manifest for the requested project."""
+        project = msg.get("project", "")
+        sync = self._file_syncs.get(project)
+        if sync:
+            self.log.info(f"Sync registered: {project} from {source}")
+            await sync.send_full_manifest(ws)
+            await self._send(ws, "sync.registered", {"project": project})
+        else:
+            available = list(self._file_syncs.keys())
+            self.log.warning(
+                f"Unknown project '{project}' from {source}."
+                f" Available: {available}"
+            )
+            await self._send(ws, "error", {
+                "message": f"Unknown project: {project}",
+                "available_projects": available,
+            })
+
+    def _resolve_project(self, project: str) -> str:
+        """Resolve a project name or path to an absolute path.
+
+        Accepts either a project name (e.g. "crm") which is looked up in
+        the projects registry, or an absolute path (passed through as-is).
+        Falls back to the daemon's default project_path.
+        """
+        if project and not project.startswith("/"):
+            sync = self._file_syncs.get(project)
+            if sync:
+                return str(sync.project_path)
+        return project or self.config.get("project_path", "")
 
     def _refresh_signers(self) -> None:
         """Reload HMAC signers after secret rotation."""
@@ -665,6 +729,7 @@ class ByfrostDaemon:
             "started_at": self._start_time or None,
             "state": "running",
             "project_path": self.config.get("project_path", ""),
+            "projects": {n: str(fs.project_path) for n, fs in self._file_syncs.items()},
             "clients": len(self._clients),
             "active_task": active.summary() if active else None,
             "queue_size": len(self.queue._queue),
@@ -790,8 +855,9 @@ class ByfrostDaemon:
                     "project.info": self._handle_project_info,
                     "project.bundle": self._handle_bundle,
                     "project.verify": self._handle_verify,
-                    "file.sync": self.file_sync.handle_file_sync,
-                    "file.changed": self.file_sync.handle_file_sync,
+                    "file.sync": self._handle_file_sync,
+                    "file.changed": self._handle_file_sync,
+                    "sync.register": self._handle_sync_register,
                 }.get(msg_type)
 
                 if handler:
@@ -800,12 +866,8 @@ class ByfrostDaemon:
                     await self._send(websocket, "error",
                                      {"message": f"Unknown message type: {msg_type}"})
 
-                # Send file manifest after the first handler response,
-                # so one-shot commands (ping, status) get their reply first
-                if not getattr(websocket, "_manifest_sent", False):
-                    websocket._manifest_sent = True  # type: ignore[attr-defined]
-                    if self.config.get("project_path"):
-                        await self.file_sync.send_full_manifest(websocket)
+                # Manifests are now sent on explicit sync.register,
+                # not auto-sent to every client.
 
         except websockets.exceptions.ConnectionClosed:
             self.log.info(f"Client disconnected: {source}")
@@ -852,11 +914,15 @@ class ByfrostDaemon:
             })
             return
 
+        # Resolve project name (e.g. "crm") to absolute path
+        raw_project = msg.get("project_path", "")
+        resolved_project = self._resolve_project(raw_project)
+
         task = Task(
             id=msg.get("task_id", uuid.uuid4().hex[:12]),
             prompt=prompt,
             priority=TaskPriority(msg.get("priority", 0)),
-            project_path=msg.get("project_path"),
+            project_path=resolved_project or None,
             allowed_tools=msg.get("allowed_tools"),
         )
 
@@ -1355,12 +1421,11 @@ class ByfrostDaemon:
         # Start health monitor
         health_task = asyncio.create_task(self._health_loop())
 
-        # Start file sync watcher
-        file_sync_task = None
-        if self.config.get("project_path"):
-            file_sync_task = asyncio.create_task(
-                self.file_sync.start(asyncio.get_event_loop())
-            )
+        # Start file sync watchers for all registered projects
+        loop = asyncio.get_event_loop()
+        for name, fs in self._file_syncs.items():
+            asyncio.create_task(fs.start(loop))
+            self.log.info(f"File sync: {name} -> {fs.project_path}")
 
         # Start WebSocket servers: TCP (mTLS) + Unix socket (local CLI)
         sock_path = str(DAEMON_SOCK)
@@ -1395,9 +1460,8 @@ class ByfrostDaemon:
             self.log.info("Server shutting down...")
         finally:
             health_task.cancel()
-            if file_sync_task:
-                file_sync_task.cancel()
-            await self.file_sync.stop()
+            for fs in self._file_syncs.values():
+                await fs.stop()
             await self.server_client.stop()
             self._running = False
 
