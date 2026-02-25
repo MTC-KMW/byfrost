@@ -547,11 +547,30 @@ struct SetupWizardView: View {
 
     private var projectConfigStep: some View {
         VStack(spacing: 16) {
-            Text("Project Directory")
+            Text("Project Root")
                 .font(.title2.bold())
 
-            Text("Select the directory where your project will live on this Mac.")
+            Text("Choose the root directory for projects on this Mac.\nProjects are registered individually and synced from the controller.")
                 .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+
+            // Recommended: home directory
+            Button {
+                wizard.projectPath = FileManager.default.homeDirectoryForCurrentUser.path
+            } label: {
+                HStack {
+                    Image(systemName: "house.fill")
+                    Text("Use Home Directory")
+                    Text("(Recommended)")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+
+            Text("or choose a custom directory:")
+                .font(.caption)
                 .foregroundColor(.secondary)
 
             HStack {
@@ -561,6 +580,19 @@ struct SetupWizardView: View {
 
                 Button("Browse...") {
                     wizard.selectProjectDirectory()
+                }
+            }
+
+            if !wizard.projectPath.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.caption)
+                    Text(wizard.projectPath)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
 
