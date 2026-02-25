@@ -120,10 +120,12 @@ class ServerClient:
         config: dict[str, Any],
         logger: logging.Logger,
         on_secret_rotated: Callable[[], None] | None = None,
+        on_credentials_fetched: Callable[[], None] | None = None,
     ) -> None:
         self.config = config
         self.log = logger
         self._on_secret_rotated = on_secret_rotated
+        self._on_credentials_fetched = on_credentials_fetched
         self._running = False
         self._tasks: list[asyncio.Task[None]] = []
         self._client: httpx.AsyncClient | None = None
@@ -341,6 +343,11 @@ class ServerClient:
         # Notify daemon to reload HMAC signers with new secret
         if self._on_secret_rotated:
             self._on_secret_rotated()
+
+        # Notify daemon that new TLS certs may be available (triggers
+        # WebSocket server restart if currently running without TLS)
+        if self._on_credentials_fetched:
+            self._on_credentials_fetched()
 
     def _save_worker_credentials(self, creds: dict[str, Any]) -> None:
         """Write worker certs and HMAC secret to ~/.byfrost/."""

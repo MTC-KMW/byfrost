@@ -630,9 +630,15 @@ class ByfrostDaemon:
         # Primary signer for outgoing messages (always the current secret)
         self._primary_signer = MessageSigner(config["secret"]) if config["secret"] else None
 
+        # Event signalling that new TLS certs arrived and the WebSocket
+        # server should restart with TLS enabled.
+        self._tls_upgrade_event: asyncio.Event | None = None
+
         # Server communication (heartbeat, credential fetch, rotation)
         self.server_client = ServerClient(
-            config, logger, on_secret_rotated=self._refresh_signers,
+            config, logger,
+            on_secret_rotated=self._refresh_signers,
+            on_credentials_fetched=self._on_credentials_fetched,
         )
 
         # File sync (multi-project, bidirectional)
@@ -715,6 +721,16 @@ class ByfrostDaemon:
         self._signers = [MessageSigner(s) for s in valid]
         self._primary_signer = MessageSigner(valid[0]) if valid else None
         self.log.info(f"Signers refreshed ({len(valid)} valid secrets)")
+
+    def _on_credentials_fetched(self) -> None:
+        """Called when server_client fetches new TLS certs + HMAC.
+
+        If the WebSocket server is currently running without TLS and
+        certs are now available, signal it to restart with TLS.
+        """
+        if self._tls_upgrade_event and TLSManager.has_server_certs():
+            self.log.info("New TLS credentials available - signalling restart")
+            self._tls_upgrade_event.set()
 
     # --- State File ---
 
@@ -1418,6 +1434,11 @@ class ByfrostDaemon:
         print(f"  PID:     {os.getpid()}")
         print(f"{'='*56}\n")
 
+        # If starting without TLS, set up event so server_client can
+        # signal us to restart when new TLS certs arrive.
+        if not use_tls:
+            self._tls_upgrade_event = asyncio.Event()
+
         # Start health monitor
         health_task = asyncio.create_task(self._health_loop())
 
@@ -1428,53 +1449,84 @@ class ByfrostDaemon:
             self.log.info(f"File sync: {name} -> {fs.project_path}")
 
         # Start WebSocket servers: TCP (mTLS) + Unix socket (local CLI)
+        # If we start without TLS and certs arrive later, the server
+        # restarts automatically with TLS enabled.
         sock_path = str(DAEMON_SOCK)
-        # Clean up stale socket
-        DAEMON_SOCK.unlink(missing_ok=True)
+        tls_upgraded = False
 
-        try:
-            async with serve(
-                self.handle_client,
-                "0.0.0.0",
-                port,
-                ssl=ssl_context,
-                ping_interval=20,
-                ping_timeout=10,
-                max_size=4 * 1024 * 1024,  # 4MB - fits 2MB file base64-encoded
-            ):
-                self.log.info(f"WebSocket server ready ({protocol}://0.0.0.0:{port})")
+        while True:
+            # Clean up stale socket
+            DAEMON_SOCK.unlink(missing_ok=True)
 
-                # Local Unix socket for CLI commands (no TLS needed)
-                async with unix_serve(
+            try:
+                async with serve(
                     self.handle_client,
-                    sock_path,
+                    "0.0.0.0",
+                    port,
+                    ssl=ssl_context,
                     ping_interval=20,
                     ping_timeout=10,
                     max_size=4 * 1024 * 1024,
                 ):
-                    os.chmod(sock_path, 0o600)
-                    self.log.info(f"Local socket ready ({sock_path})")
-                    self._write_state(state="running")
-                    await asyncio.Future()  # Run forever
-        except asyncio.CancelledError:
-            self.log.info("Server shutting down...")
-        finally:
-            health_task.cancel()
-            for fs in self._file_syncs.values():
-                await fs.stop()
-            await self.server_client.stop()
-            self._running = False
+                    self.log.info(f"WebSocket server ready ({protocol}://0.0.0.0:{port})")
 
-            # Kill any active sessions
-            active = self.queue.active
-            if active and active.tmux_session:
-                self.sessions.kill_session(active.tmux_session)
-                self.sessions.cleanup(active.id)
+                    async with unix_serve(
+                        self.handle_client,
+                        sock_path,
+                        ping_interval=20,
+                        ping_timeout=10,
+                        max_size=4 * 1024 * 1024,
+                    ):
+                        os.chmod(sock_path, 0o600)
+                        self.log.info(f"Local socket ready ({sock_path})")
+                        self._write_state(state="running")
 
-            self._write_state(state="stopped")
-            PID_FILE.unlink(missing_ok=True)
-            DAEMON_SOCK.unlink(missing_ok=True)
-            self.log.info("Daemon stopped")
+                        if self._tls_upgrade_event:
+                            await self._tls_upgrade_event.wait()
+                            self.log.info("TLS certs arrived - restarting server with TLS")
+                        else:
+                            await asyncio.Future()  # Run forever
+            except asyncio.CancelledError:
+                self.log.info("Server shutting down...")
+                break
+
+            # If we got here via TLS upgrade, reload certs and loop
+            if self._tls_upgrade_event and self._tls_upgrade_event.is_set():
+                try:
+                    ssl_context = TLSManager.get_server_ssl_context()
+                    use_tls = True
+                    protocol = "wss"
+                    self._tls_upgrade_event = None
+                    self.log.info("TLS upgrade: server restarting with mTLS")
+                    tls_upgraded = True
+                    # Reload HMAC secret into config
+                    new_secret = SecretManager.load()
+                    if new_secret:
+                        self.config["secret"] = new_secret
+                    continue
+                except Exception as e:
+                    self.log.error(f"TLS upgrade failed: {e}")
+                    break
+            else:
+                break
+
+        # Cleanup
+        health_task.cancel()
+        for fs in self._file_syncs.values():
+            await fs.stop()
+        await self.server_client.stop()
+        self._running = False
+
+        # Kill any active sessions
+        active = self.queue.active
+        if active and active.tmux_session:
+            self.sessions.kill_session(active.tmux_session)
+            self.sessions.cleanup(active.id)
+
+        self._write_state(state="stopped")
+        PID_FILE.unlink(missing_ok=True)
+        DAEMON_SOCK.unlink(missing_ok=True)
+        self.log.info("Daemon stopped")
 
 
 # ---------------------------------------------------------------------------
