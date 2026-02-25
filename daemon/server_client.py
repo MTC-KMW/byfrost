@@ -146,9 +146,21 @@ class ServerClient:
         Returns True if initialized, False if auth is missing.
         Daemon should continue running either way.
         """
-        if not self._load_auth():
+        # Retry auth loading - the daemon may start before 'byfrost login'
+        # completes (e.g. launchd auto-starts daemon on login).
+        loaded = self._load_auth()
+        if not loaded:
+            self.log.info(
+                "Server client: auth.json not ready, will retry every 10s..."
+            )
+            for _ in range(30):  # Retry up to 5 minutes
+                await asyncio.sleep(10)
+                if self._load_auth():
+                    loaded = True
+                    break
+        if not loaded:
             self.log.warning(
-                "Server client: no auth credentials found. "
+                "Server client: no auth credentials found after retries. "
                 "Run 'byfrost login' on this machine first."
             )
             return False

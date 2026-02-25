@@ -220,7 +220,9 @@ final class WizardState: ObservableObject {
             return
         }
 
-        // Install plist and start
+        // Install plist and restart (stop first in case launchd
+        // auto-started a stale daemon before auth.json existed)
+        manager.stop()
         manager.installPlist()
         manager.start()
 
