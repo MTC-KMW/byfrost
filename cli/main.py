@@ -280,6 +280,26 @@ class ByfrostClient:
         finally:
             await ws.close()
 
+    async def add_project(self, name: str):
+        """Register a new project on the remote daemon."""
+        ws = await self._connect()
+        msg = self._sign({"type": "project.add", "name": name})
+        await ws.send(json.dumps(msg))
+
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=15)
+            data = json.loads(raw)
+            if data.get("type") == "project.added":
+                return data
+            elif data.get("type") == "error":
+                _print_error(data.get("message", "Unknown error"))
+                return None
+        except asyncio.TimeoutError:
+            _print_error("Timeout waiting for project registration")
+            return None
+        finally:
+            await ws.close()
+
     async def cancel_task(self, task_id):
         """Cancel a running or queued task."""
         ws = await self._connect()
@@ -1204,7 +1224,32 @@ def _do_set_project(path_arg: str | None) -> int:
 
 
 def _do_add_project(path_arg: str, name_arg: str | None = None) -> int:
-    """Register a project with the daemon (multi-project support)."""
+    """Register a project with the daemon (multi-project support).
+
+    On a controller, sends a remote message to the worker daemon.
+    On a worker, writes directly to daemon.json.
+    """
+    auth = load_auth()
+    role = auth.get("role", "") if auth else ""
+
+    name = name_arg or Path(path_arg).resolve().name
+
+    if role == "controller":
+        # Remote: send to daemon over WebSocket
+        config = load_config()
+        client = ByfrostClient(config)
+        result = asyncio.run(client.add_project(name))
+        if result:
+            _print_status(
+                f"Project registered on worker: {result['name']} -> {result['path']}"
+            )
+            _print_status(f"Run 'byfrost sync start' in ~/{name} to sync files")
+            return 0
+        else:
+            _print_error("Failed to register project on worker")
+            return 1
+
+    # Local (worker): write directly to daemon.json
     from core.config import load_daemon_config, load_projects, save_daemon_config, save_projects
 
     project = Path(path_arg).resolve()
@@ -1212,7 +1257,6 @@ def _do_add_project(path_arg: str, name_arg: str | None = None) -> int:
         _print_error(f"Not a directory: {project}")
         return 1
 
-    name = name_arg or project.name
     projects = load_projects()
     projects[name] = str(project)
     save_projects(projects)

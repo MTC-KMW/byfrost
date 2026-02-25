@@ -881,6 +881,7 @@ class ByfrostDaemon:
                     "file.sync": self._handle_file_sync,
                     "file.changed": self._handle_file_sync,
                     "sync.register": self._handle_sync_register,
+                    "project.add": self._handle_add_project,
                 }.get(msg_type)
 
                 if handler:
@@ -1022,6 +1023,58 @@ class ByfrostDaemon:
             "lines": task.output_lines[-50:],
             "tmux_session": task.tmux_session,
             "hint": f"tmux attach -t {task.tmux_session}",
+        })
+
+    async def _handle_add_project(self, ws, msg, source="unknown"):
+        """Register a new project remotely from controller."""
+        name = msg.get("name", "")
+        if not name:
+            await self._send(ws, "error", {"message": "Project name required"})
+            return
+
+        # Create directory under ~/
+        project_dir = Path.home() / name
+        project_dir.mkdir(parents=True, exist_ok=True)
+        project_path = str(project_dir)
+
+        # Save to daemon.json
+        from core.config import (
+            load_daemon_config,
+            load_projects,
+            save_daemon_config,
+            save_projects,
+        )
+
+        projects = load_projects()
+        projects[name] = project_path
+        save_projects(projects)
+
+        # Update legacy project_path if not set
+        cfg = load_daemon_config()
+        if not cfg.get("project_path"):
+            cfg["project_path"] = project_path
+            save_daemon_config(cfg)
+
+        # Hot-add file sync (no restart needed)
+        if name not in self._file_syncs:
+            from daemon.file_sync import DaemonFileSync
+
+            fs = DaemonFileSync(
+                project_path=project_path,
+                project_name=name,
+                broadcast_fn=self._broadcast,
+                send_fn=self._send,
+                logger=self.log,
+                on_source_changed=self._schedule_restart,
+            )
+            self._file_syncs[name] = fs
+            loop = asyncio.get_event_loop()
+            asyncio.create_task(fs.start(loop))
+            self.log.info(f"Hot-added project: {name} -> {project_path}")
+
+        await self._send(ws, "project.added", {
+            "name": name,
+            "path": project_path,
         })
 
     async def _handle_project_info(self, ws, msg, source="unknown"):
