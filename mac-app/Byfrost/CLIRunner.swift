@@ -91,6 +91,11 @@ final class CLIRunner: ObservableObject {
         }
         process.arguments = args
 
+        // Disable Python stdout buffering so output arrives line-by-line
+        var env = ProcessInfo.processInfo.environment
+        env["PYTHONUNBUFFERED"] = "1"
+        process.environment = env
+
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
@@ -206,6 +211,11 @@ final class CLIRunner: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: command)
         process.arguments = arguments
+
+        // Disable Python stdout buffering
+        var env = ProcessInfo.processInfo.environment
+        env["PYTHONUNBUFFERED"] = "1"
+        process.environment = env
 
         let stdout = Pipe()
         let stderr = Pipe()
