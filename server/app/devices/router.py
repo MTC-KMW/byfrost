@@ -110,7 +110,7 @@ async def register_device(
             Device.platform == body.platform,
         )
     )
-    existing = result.scalar_one_or_none()
+    existing = result.scalars().first()
 
     if existing:
         # Re-register: rotate token, update role

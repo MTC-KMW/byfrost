@@ -36,7 +36,14 @@ class Device(Base):
     """A registered worker or controller device."""
 
     __tablename__ = "devices"
-    __table_args__ = (Index("ix_devices_user_id", "user_id"),)
+    __table_args__ = (
+        Index("ix_devices_user_id", "user_id"),
+        Index(
+            "uq_devices_user_name_platform",
+            "user_id", "name", "platform",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
