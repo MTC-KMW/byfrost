@@ -48,14 +48,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let wizardView = SetupWizardView(
             daemonManager: manager,
             onComplete: { [weak self] in
-                self?.wizardWindow?.close()
-                self?.wizardWindow = nil
+                // Transition to menu bar first, then close the wizard
+                // window after a short delay so Core Animation can flush
+                // pending transactions before the hosting view deallocates.
                 self?.showMenuBar(manager: manager)
+                DispatchQueue.main.async {
+                    self?.wizardWindow?.orderOut(nil)
+                    self?.wizardWindow = nil
+                }
             }
         )
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
