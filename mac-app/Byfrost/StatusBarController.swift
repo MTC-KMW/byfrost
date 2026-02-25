@@ -20,10 +20,14 @@ final class StatusBarController {
         )
 
         popover = NSPopover()
+        popover.contentSize = NSSize(width: 320, height: 1)
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(
+        let hostingController = NSHostingController(
             rootView: MenuBarView(daemonManager: daemonManager)
         )
+        // Let SwiftUI determine the height from content
+        hostingController.sizingOptions = .preferredContentSize
+        popover.contentViewController = hostingController
 
         if let button = statusItem.button {
             button.action = #selector(togglePopover(_:))
