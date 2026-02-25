@@ -784,14 +784,8 @@ async def _test_worker_connection(addresses: dict | None, port: int) -> str | No
                 if data.get("type") == "error":
                     msg = data.get("message", "")
                     if "hmac" in msg.lower() or "auth" in msg.lower():
-                        _print_error(
-                            "Worker reachable but authentication failed. "
-                            "The daemon may be using a different HMAC secret."
-                        )
-                        _print_error(
-                            "Fix: restart the daemon so it fetches "
-                            "the paired credentials from the server."
-                        )
+                        # Don't treat as fatal - daemon may still be
+                        # fetching fresh credentials from the server.
                         return None
             except Exception:
                 continue
@@ -927,10 +921,21 @@ async def _do_connect(worker_hint: str | None) -> int:
         auth["worker_addresses"] = worker_addresses
     save_auth(auth)
 
-    # Test connection (best-effort)
+    # Test connection - retry to give the daemon time to discover the
+    # new pairing and fetch credentials (it polls every ~15 seconds).
     if worker_addresses:
         _print_status("Testing direct connection to worker...")
-        result = await _test_worker_connection(worker_addresses, DEFAULT_PORT)
+        result = None
+        for attempt in range(4):
+            result = await _test_worker_connection(worker_addresses, DEFAULT_PORT)
+            if result:
+                break
+            if attempt < 3:
+                wait = 10 if attempt == 0 else 15
+                _print_status(
+                    f"Waiting for daemon to pick up credentials... ({attempt + 1}/3)"
+                )
+                await asyncio.sleep(wait)
         if not result:
             print()
             _print_status("Could not reach worker directly (daemon may not be running yet).")
