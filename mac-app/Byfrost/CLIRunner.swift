@@ -284,6 +284,51 @@ final class CLIRunner: ObservableObject {
         return await installTool(npm, ["install", "-g", "@anthropic-ai/claude-code"])
     }
 
+    // MARK: - Python Dependencies
+
+    /// Ensure ~/byfrost/.venv exists, creating it if needed.
+    func ensureVenv() async -> Result {
+        let home = NSHomeDirectory()
+        let venvPath = "\(home)/byfrost/.venv"
+
+        if FileManager.default.fileExists(atPath: "\(venvPath)/bin/python3") {
+            return Result(exitCode: 0, output: "venv exists", error: "")
+        }
+
+        // Find system python3
+        let python: String
+        if FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/python3") {
+            python = "/opt/homebrew/bin/python3"
+        } else if FileManager.default.isExecutableFile(atPath: "/usr/local/bin/python3") {
+            python = "/usr/local/bin/python3"
+        } else {
+            python = "/usr/bin/python3"
+        }
+
+        return await installTool(python, ["-m", "venv", venvPath])
+    }
+
+    /// Install byfrost Python package into the venv.
+    ///
+    /// Creates the venv if needed, then runs `pip install -e .` so the
+    /// daemon can import all required modules (pathspec, etc.).
+    func installPythonDeps() async -> Result {
+        let home = NSHomeDirectory()
+        let pip = "\(home)/byfrost/.venv/bin/pip"
+
+        // Create venv if it doesn't exist
+        let venvResult = await ensureVenv()
+        if venvResult.exitCode != 0 {
+            return venvResult
+        }
+
+        guard FileManager.default.isExecutableFile(atPath: pip) else {
+            return Result(exitCode: 1, output: "", error: "venv pip not found at \(pip)")
+        }
+
+        return await installTool(pip, ["install", "-e", "\(home)/byfrost"])
+    }
+
     // MARK: - Shell Helpers
 
     /// Run a shell command synchronously. Returns exit code + output.

@@ -220,15 +220,24 @@ final class WizardState: ObservableObject {
             return
         }
 
-        // Install plist and restart (stop first in case launchd
-        // auto-started a stale daemon before auth.json existed)
-        manager.stop()
-        manager.installPlist()
-        manager.start()
-
-        // Wait for PID to appear (up to 5s)
         Task {
-            for _ in 0..<10 {
+            // Install Python dependencies into the venv first so the
+            // daemon can import all required modules (pathspec, etc.)
+            let depsResult = await cliRunner.installPythonDeps()
+            if depsResult.exitCode != 0 {
+                errorMessage = "Failed to install Python deps: \(depsResult.error)"
+                isLoading = false
+                return
+            }
+
+            // Install plist and restart (stop first in case launchd
+            // auto-started a stale daemon before auth.json existed)
+            manager.stop()
+            manager.installPlist()
+            manager.start()
+
+            // Wait for PID to appear (up to 10s)
+            for _ in 0..<20 {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 if manager.pid != nil {
                     daemonStarted = true

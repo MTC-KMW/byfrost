@@ -262,6 +262,19 @@ class LaunchdManager(DaemonManager):
                         except ValueError:
                             pass
 
+        # Fallback: read daemon.pid file written by the daemon itself
+        if pid is None:
+            pid_file = BRIDGE_DIR / "daemon.pid"
+            if pid_file.exists():
+                try:
+                    saved_pid = int(pid_file.read_text().strip())
+                    # Verify process is actually alive
+                    os.kill(saved_pid, 0)
+                    pid = saved_pid
+                    running = True
+                except (ValueError, ProcessLookupError, PermissionError):
+                    pass
+
         return {"installed": True, "running": running, "pid": pid}
 
 
@@ -362,6 +375,18 @@ WantedBy=default.target
                     p = int(line.split("=", 1)[1])
                     pid = p if p > 0 else None
                 except ValueError:
+                    pass
+
+        # Fallback: read daemon.pid file written by the daemon itself
+        if pid is None:
+            pid_file = BRIDGE_DIR / "daemon.pid"
+            if pid_file.exists():
+                try:
+                    saved_pid = int(pid_file.read_text().strip())
+                    os.kill(saved_pid, 0)
+                    pid = saved_pid
+                    active = True
+                except (ValueError, ProcessLookupError, PermissionError):
                     pass
 
         return {"installed": True, "running": active, "pid": pid}
