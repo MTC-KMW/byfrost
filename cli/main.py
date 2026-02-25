@@ -765,12 +765,12 @@ async def _test_worker_connection(addresses: dict | None, port: int) -> str | No
                 )
                 # Send a signed ping
                 start = time.time()
-                msg_data: dict[str, Any] = {
-                    "type": "ping", "timestamp": time.time(),
-                }
+                msg_data: dict[str, Any] = {"type": "ping"}
                 if secret:
                     signer = MessageSigner(secret)
-                    msg_data["hmac"] = signer.sign(msg_data)
+                    msg_data = signer.sign(msg_data)
+                else:
+                    msg_data["timestamp"] = time.time()
                 await ws.send(json.dumps(msg_data))
                 raw = await asyncio.wait_for(ws.recv(), timeout=5)
                 latency = (time.time() - start) * 1000
