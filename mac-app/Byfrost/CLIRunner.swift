@@ -30,6 +30,7 @@ final class CLIRunner: ObservableObject {
             "/usr/local/bin/byfrost",
             "/opt/homebrew/bin/byfrost",
             NSHomeDirectory() + "/.local/bin/byfrost",
+            NSHomeDirectory() + "/byfrost/.venv/bin/byfrost",
         ]
         for path in candidates {
             if FileManager.default.isExecutableFile(atPath: path) {
