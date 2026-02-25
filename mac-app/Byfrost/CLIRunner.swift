@@ -98,9 +98,9 @@ final class CLIRunner: ObservableObject {
         process.environment = env
 
         let stdout = Pipe()
-        let stderr = Pipe()
         process.standardOutput = stdout
-        process.standardError = stderr
+        // Discard stderr to prevent pipe deadlock (we only parse stdout)
+        process.standardError = FileHandle.nullDevice
 
         try process.run()
 
