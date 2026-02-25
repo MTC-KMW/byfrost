@@ -110,18 +110,22 @@ final class CLIRunner: ObservableObject {
             DispatchQueue.global(qos: .userInitiated).async {
                 var userCode: String?
                 var verificationURI: String?
+                var resumed = false
 
                 let handle = stdout.fileHandleForReading
                 var buffer = Data()
 
-                // Read line by line until we find both values
+                // Read line by line until we find both values,
+                // then keep draining to prevent pipe deadlock
                 while process.isRunning {
                     let chunk = handle.availableData
                     if chunk.isEmpty {
-                        // EOF or no data - small wait
                         Thread.sleep(forTimeInterval: 0.1)
                         continue
                     }
+                    // After finding device code, just drain without parsing
+                    if resumed { continue }
+
                     buffer.append(chunk)
 
                     // Process complete lines
@@ -138,10 +142,6 @@ final class CLIRunner: ObservableObject {
                             in: .whitespaces
                         )
 
-                        // Parse: "  [*] Open this URL in your browser:"
-                        // Next non-empty line is the URL
-                        // Parse: "  [*] Enter this code when prompted:"
-                        // Next non-empty line is the code
                         if trimmed.contains("http") && trimmed.contains("://") {
                             verificationURI = trimmed
                         } else if trimmed.count >= 8,
@@ -150,26 +150,28 @@ final class CLIRunner: ObservableObject {
                                   trimmed.allSatisfy({
                                       $0.isUppercase || $0.isNumber || $0 == "-"
                                   }) {
-                            // Matches pattern like "XXXX-XXXX"
                             userCode = trimmed
                         }
 
-                        if let code = userCode, let uri = verificationURI {
+                        if !resumed, let code = userCode, let uri = verificationURI {
                             continuation.resume(
                                 returning: DeviceCode(
                                     userCode: code,
                                     verificationURI: uri
                                 )
                             )
-                            return
+                            resumed = true
                         }
                     }
                 }
+                // Drain any remaining data after process exits
+                _ = handle.readDataToEndOfFile()
 
-                // Process exited before we found the device code
-                continuation.resume(throwing: CLIError.loginFailed(
-                    "Login process exited before displaying device code"
-                ))
+                if !resumed {
+                    continuation.resume(throwing: CLIError.loginFailed(
+                        "Login process exited before displaying device code"
+                    ))
+                }
             }
         }
 
