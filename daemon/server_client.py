@@ -157,8 +157,8 @@ class ServerClient:
         # Discover pairing if not in auth.json
         await self._discover_pairing()
 
-        # Fetch credentials on startup (certs + HMAC)
-        await self._fetch_credentials_if_needed()
+        # Always fetch fresh credentials on startup to stay in sync
+        await self._fetch_credentials_if_needed(force=True)
 
         # Start background loops
         self._tasks.append(asyncio.create_task(self._heartbeat_loop()))
@@ -279,7 +279,7 @@ class ServerClient:
             if not self._pairing_id:
                 await self._discover_pairing()
                 if self._pairing_id:
-                    await self._fetch_credentials_if_needed()
+                    await self._fetch_credentials_if_needed(force=True)
                 await asyncio.sleep(15)
             else:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
@@ -300,13 +300,19 @@ class ServerClient:
 
     # -- Credential fetch --
 
-    async def _fetch_credentials_if_needed(self) -> None:
-        """Fetch worker certs + HMAC from server if needed."""
+    async def _fetch_credentials_if_needed(self, force: bool = False) -> None:
+        """Fetch worker certs + HMAC from server if needed.
+
+        Args:
+            force: Always fetch, even if local certs exist. Used on
+                   startup and after discovering a new pairing to ensure
+                   credentials are current.
+        """
         if not self._pairing_id:
             self.log.info("No pairing_id - skipping credential fetch")
             return
 
-        if TLSManager.has_server_certs() and SECRET_FILE.exists():
+        if not force and TLSManager.has_server_certs() and SECRET_FILE.exists():
             self.log.info("Worker credentials already present locally")
             return
 
@@ -331,6 +337,10 @@ class ServerClient:
         creds = resp.json()
         self._save_worker_credentials(creds)
         self.log.info("Worker credentials fetched and saved")
+
+        # Notify daemon to reload HMAC signers with new secret
+        if self._on_secret_rotated:
+            self._on_secret_rotated()
 
     def _save_worker_credentials(self, creds: dict[str, Any]) -> None:
         """Write worker certs and HMAC secret to ~/.byfrost/."""
