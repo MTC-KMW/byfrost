@@ -422,12 +422,12 @@ final class DaemonManager: ObservableObject {
             <integer>10</integer>
 
             <key>WorkingDirectory</key>
-            <string>\(home)</string>
+            <string>\(home)/byfrost</string>
 
             <key>EnvironmentVariables</key>
             <dict>
                 <key>PATH</key>
-                <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+                <string>\(home)/byfrost/.venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
                 <key>BYFROST_HOME</key>
                 <string>\(bridgeDir)</string>
             </dict>
@@ -461,9 +461,13 @@ final class DaemonManager: ObservableObject {
     // MARK: - Helpers
 
     /// Find python3 executable path (matches what CLI would use).
+    ///
+    /// Prefers the byfrost venv at ~/byfrost/.venv so the daemon can
+    /// import the installed package. Falls back to system Python.
     private func findPython() -> String {
-        // Check common locations
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         let candidates = [
+            "\(home)/byfrost/.venv/bin/python3",
             "/opt/homebrew/bin/python3",
             "/usr/local/bin/python3",
             "/usr/bin/python3",
