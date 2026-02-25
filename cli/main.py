@@ -209,7 +209,10 @@ class ByfrostClient:
 
                 if msg_type == "task.accepted":
                     pos = data.get("queue_position", 0)
+                    project_name = data.get("project", "")
                     _print_status(f"Task accepted: {data.get('task_id')}")
+                    if project_name:
+                        _print_status(f"Project: {project_name}")
                     if pos > 0:
                         _print_status(f"Queue position: {pos}")
 
@@ -498,6 +501,8 @@ def _format_time(ts):
 def _print_task_detail(data):
     print(f"\n  Task:     {data.get('id', '?')}")
     print(f"  Status:   {data.get('status', '?')}")
+    if data.get("project_path"):
+        print(f"  Project:  {Path(data['project_path']).name} ({data['project_path']})")
     print(f"  Priority: {data.get('priority', 0)}")
     print(f"  Prompt:   {data.get('prompt', data.get('prompt_preview', '?'))[:100]}")
     print(f"  Created:  {_format_time(data.get('created_at'))}")
@@ -528,6 +533,8 @@ def _print_queue_status(data):
     if active:
         print("\n  Active Task:")
         print(f"    ID:      {active['id']}")
+        if active.get("project"):
+            print(f"    Project: {active['project']}")
         print(f"    Prompt:  {active.get('prompt_preview', '?')}")
         print(f"    Started: {_format_time(active.get('started_at'))}")
         print(f"    Session: {active.get('tmux_session', '-')}")
@@ -538,7 +545,8 @@ def _print_queue_status(data):
     if queued:
         print(f"\n  Queued ({len(queued)}):")
         for t in queued:
-            print(f"    [{t['id']}] {t.get('prompt_preview', '?')}")
+            proj = f"({t['project']}) " if t.get("project") else ""
+            print(f"    [{t['id']}] {proj}{t.get('prompt_preview', '?')}")
     else:
         print("\n  Queue empty")
 
@@ -1435,7 +1443,9 @@ def main():
     priority_map = {"normal": 0, "high": 1, "urgent": 2}
 
     if args.command == "send":
-        # Auto-detect project from cwd if not explicitly given
+        # Auto-detect project from cwd name, or use explicit --project flag.
+        # The daemon validates the name against registered projects and
+        # falls back to its default if unrecognized.
         project = args.project or Path.cwd().resolve().name
         exit_code = asyncio.run(client.send_task(
             args.prompt,

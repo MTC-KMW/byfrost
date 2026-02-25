@@ -347,6 +347,7 @@ class Task:
             "exit_code": self.exit_code,
             "tmux_session": self.tmux_session,
             "output_line_count": len(self.output_lines),
+            "project": Path(self.project_path).name if self.project_path else None,
         }
 
 
@@ -713,6 +714,12 @@ class ByfrostDaemon:
             sync = self._file_syncs.get(project)
             if sync:
                 return str(sync.project_path)
+            # Name didn't match any registered project - fall back to default
+            # instead of using an unresolvable relative name as a cd target
+            self.log.warning(
+                f"Unknown project name '{project}', using default"
+            )
+            return self.config.get("project_path", "")
         return project or self.config.get("project_path", "")
 
     def _refresh_signers(self) -> None:
@@ -944,10 +951,13 @@ class ByfrostDaemon:
 
         self.audit.task_submit(source, task.id, prompt[:80])
         task = self.queue.enqueue(task)
+        effective_project = task.project_path or self.config.get("project_path", "")
         await self._send(ws, "task.accepted", {
             "task_id": task.id,
             "queue_position": len(self.queue.pending),
             "status": task.status.value,
+            "project": Path(effective_project).name if effective_project else "default",
+            "project_path": effective_project,
         })
 
         # Try to start it immediately if nothing is running
