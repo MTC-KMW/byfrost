@@ -726,8 +726,8 @@ class ByfrostDaemon:
             self.log.warning(
                 f"Unknown project name '{project}', using default"
             )
-            return self.config.get("project_path", "")
-        return project or self.config.get("project_path", "")
+            return str(self.config.get("project_path", ""))
+        return project or str(self.config.get("project_path", ""))
 
     def _refresh_signers(self) -> None:
         """Reload HMAC signers after secret rotation."""
@@ -1522,7 +1522,6 @@ class ByfrostDaemon:
         # If we start without TLS and certs arrive later, the server
         # restarts automatically with TLS enabled.
         sock_path = str(DAEMON_SOCK)
-        tls_upgraded = False
 
         while True:
             # Clean up stale socket
@@ -1568,7 +1567,6 @@ class ByfrostDaemon:
                     protocol = "wss"
                     self._tls_upgrade_event = None
                     self.log.info("TLS upgrade: server restarting with mTLS")
-                    tls_upgraded = True
                     # Reload HMAC secret into config
                     new_secret = SecretManager.load()
                     if new_secret:
